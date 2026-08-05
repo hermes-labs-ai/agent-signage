@@ -26,12 +26,15 @@ and silence the rest of the time.
 
 ## What it does
 
-`agent-signage` is a PreToolUse hook for AI coding agents — a Claude Code hook today, and,
-being a plain subprocess, usable in any harness that can shell out before a file operation.
+When a coding agent edits a file, nothing in its tool loop errors if the checkout is stale, a
+symlink points outside the repo, or another worktree is mid-edit on the same path — the edit
+just lands, clean and wrong.
+
+`agent-signage` is a PreToolUse hook that closes that gap: a Claude Code hook today, and, being
+a plain subprocess, usable in any agent harness that can shell out before a file operation.
 Before a Read, Edit, Write, Grep, or Glob call runs, it checks measurable facts about the git
-state of the file about to be touched — is the checkout behind its upstream, is another `git
-worktree` mid-edit on the same file, does a symlink point outside the repo — and injects one
-short line into the agent's context if something matters. The rest of the time it says nothing.
+state of the file about to be touched and injects one short line into the agent's context if
+something matters. The rest of the time it says nothing.
 
 Your agent opens a repo and starts fixing things. The checkout is on a stale branch, 26 commits
 behind the branch you actually deploy. Every edit is correct, well-tested, and applied to a
@@ -99,8 +102,11 @@ read [docs/integrating.md](docs/integrating.md).
 
 ## Why this instead of a rule in your prompt file
 
-The obvious alternative is a line in `CLAUDE.md` or `AGENTS.md`: *always check the branch is
-current.* That has two costs, and the second one is the reason this project exists.
+Standing rules in a prompt file are a blunt instrument for context engineering: they are read
+once at the start of a session, then have to survive dozens of turns of unrelated work before
+the one moment they were written for actually arrives — and often they don't.
+
+That is the first of two costs, and the second is the reason this project exists.
 
 **It doesn't fire when you need it.** The failure is not a knowledge gap — your agent already
 knows that a local checkout can diverge from what's deployed. It just has no reason to form
@@ -117,6 +123,9 @@ capability for a set of reflexes, most of which are irrelevant most of the time.
 A sign is present only while the action that needs it is happening. The rest of the time the
 context is exactly as it would have been if this tool were not installed — which is the point.
 Constrain the model where the constraint is load-bearing, and leave it alone everywhere else.
+Anthropic calls this shape [just-in-time
+context](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents):
+retrieve the fact at the moment of need rather than pre-loading everything that might matter.
 
 This is a design argument, not a measured result. The token cost is measurable and small; the
 conditioning cost is not something this project has quantified.
