@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches 1.0. Before 1.0, minor version bumps may include breaking changes.
 
+## [0.1.1] - 2026-08-05
+
+### Fixed
+- The 0.1.0 source distribution shipped files that were never meant to leave the
+  working tree: a directory of internal integration-strategy notes, the release
+  process document, and two sets of release notes. The sdist is now built from an
+  explicit allow-list rather than "everything not ignored by git", so a stray file
+  cannot ride along by default. The wheel was unaffected, so `pip install` never
+  delivered them.
+- Added the `py.typed` marker. `pyproject.toml` has declared the `Typing :: Typed`
+  classifier since 0.0.8, which is a promise to type checkers; without the marker
+  file in the installed wheel, mypy and pyright silently resolved every import
+  from this package to `Any`. The classifier is now true.
+
+No behaviour changes. No new dependencies. The six signs are unchanged.
+
 ## [0.1.0] - 2026-08-05
 
 ### Added

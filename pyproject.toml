@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-signage"
-version = "0.1.0"
+version = "0.1.1"
 description = "Road signs for coding agents: one true fact at the moment of action, silence otherwise"
 readme = "README.md"
 license = "Apache-2.0"
@@ -50,6 +50,33 @@ dev = ["pytest>=7", "ruff>=0.15"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_signage"]
+
+# py.typed is a promise to type checkers and has to be in the installed wheel,
+# not just the repo. Without it, `Typing :: Typed` above is a false claim and
+# every import from this package resolves to Any in a checked project.
+[tool.hatch.build.targets.wheel.force-include]
+"src/agent_signage/py.typed" = "agent_signage/py.typed"
+
+# Allow-list, not a deny-list. 0.1.0's sdist shipped a directory of internal
+# notes because the default is "everything not gitignored"; naming what belongs
+# means a new stray file cannot ride along by default.
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+  "/docs",
+  "/examples",
+  "/evals",
+  "/claude-plugin",
+  "/.github",
+  "/README.md",
+  "/CHANGELOG.md",
+  "/CONTRIBUTING.md",
+  "/CODE_OF_CONDUCT.md",
+  "/CITATION.cff",
+  "/LICENSE",
+  "/pyproject.toml",
+]
 
 [tool.ruff]
 line-length = 100

@@ -11,7 +11,7 @@ authors:
   - family-names: Bosch
     given-names: Rolando
     orcid: "https://orcid.org/0009-0005-4896-1112"
-version: 0.1.0
+version: 0.1.1
 date-released: '2026-08-05'
 license: Apache-2.0
 repository-code: "https://github.com/hermes-labs-ai/agent-signage"
