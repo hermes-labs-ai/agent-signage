@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: If you use this software, please cite it as below.
+type: software
+title: agent-signage
+abstract: >-
+  Road signs for coding agents. A PreToolUse hook that checks, at the moment a
+  coding agent reads or edits a file, whether the file's git repository is
+  behind its upstream, and injects one true, checkable fact when it is.
+  Silent otherwise.
+authors:
+  - family-names: Bosch
+    given-names: Rolando
+    orcid: "https://orcid.org/0009-0005-4896-1112"
+version: 0.0.8
+date-released: "2026-08-05"
+license: Apache-2.0
+repository-code: "https://github.com/hermes-labs-ai/agent-signage"
