@@ -68,13 +68,27 @@ muted.
 
 ## Why this instead of a rule in your prompt file
 
-A line in `CLAUDE.md` or `AGENTS.md` saying "always check the branch is current" costs tokens
-on every request and fires on the model's memory. This fires on **the condition**, computed
-fresh, and says nothing when there is nothing to say.
+The obvious alternative is a line in `CLAUDE.md` or `AGENTS.md`: *always check the branch is
+current.* That has two costs, and the second one is the reason this project exists.
 
-The difference matters because the failure is not a knowledge gap. Your agent already knows
-that deployed and local can diverge. It just has no reason to *form the hypothesis* at turn
-fifteen, in the middle of a task, when everything looks normal.
+**It doesn't fire when you need it.** The failure is not a knowledge gap — your agent already
+knows that a local checkout can diverge from what's deployed. It just has no reason to form
+that hypothesis at turn fifteen, mid-task, when nothing in front of it looks wrong. A rule it
+read at turn zero is competing with everything that has happened since.
+
+**It conditions every other task too.** A standing instruction is in context for every request,
+including the ones it has nothing to do with. It is attended to while the model is writing a
+migration, reviewing a diff, or answering a question about documentation — narrowing how it
+interprets and what it generates in all of them. A constraint written for one situation becomes
+a standing bias on every situation. Add enough of them and you have quietly traded general
+capability for a set of reflexes, most of which are irrelevant most of the time.
+
+A sign is present only while the action that needs it is happening. The rest of the time the
+context is exactly as it would have been if this tool were not installed — which is the point.
+Constrain the model where the constraint is load-bearing, and leave it alone everywhere else.
+
+This is a design argument, not a measured result. The token cost is measurable and small; the
+conditioning cost is not something this project has quantified.
 
 ## Guarantees
 
@@ -112,31 +126,17 @@ still catches the failures it targets.
 
 ## Install
 
-Requires Python 3.9+ and `git` on `PATH`. No package dependencies either way.
-
-### From source (works now)
-
-```bash
-pip install git+https://github.com/hermes-labs-ai/agent-signage.git
-```
-
-Or clone it first:
-
-```bash
-git clone https://github.com/hermes-labs-ai/agent-signage.git
-cd agent-signage
-pip install .
-```
-
-### From PyPI (not published yet)
-
-`agent-signage` is not on PyPI yet. Once it is, this will work:
+Requires Python 3.9+ and `git` on `PATH`. No package dependencies.
 
 ```bash
 pip install agent-signage
 ```
 
-Until then, use the source install above.
+Or from source:
+
+```bash
+pip install git+https://github.com/hermes-labs-ai/agent-signage.git
+```
 
 ### Claude Code
 
@@ -242,6 +242,19 @@ Two limits worth knowing before you adopt:
 - **The guarantees are self-attested.** They are asserted by this repository's own test suite,
   which is a real bar but not an independent one. Nobody outside the project has exercised it
   adversarially yet. Read the tests — they are the specification.
+
+## Research
+
+`agent-signage` comes out of [Hermes Labs](https://hermes-labs.ai), an AI reliability
+engineering studio. The research behind the wider programme — on how AI systems lose meaning,
+misreport their own state, and fail in ways standard evaluations miss — is published with DOIs
+at [hermes-labs.ai/research](https://hermes-labs.ai/research).
+
+The one most directly adjacent to this tool is *Precise Records, Unstable Meanings*
+([10.5281/zenodo.21652317](https://doi.org/10.5281/zenodo.21652317)), a measurement-validity
+audit separating what agent telemetry can actually establish from what gets claimed on top of
+it. That distinction — report the measurement, not the inference — is the rule every sign here
+has to satisfy.
 
 ## License
 

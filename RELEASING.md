@@ -63,9 +63,19 @@ The project name is also claimed permanently on first upload.
 
 ## Order matters
 
-Push the GitHub repo **before** publishing to PyPI. The README badges and the primary install
-command both point at `github.com/hermes-labs-ai/agent-signage`; publishing first means the
-PyPI project page ships with links to a 404.
+The README's primary install is `pip install agent-signage`, so that command has to actually
+work by the time anyone reads it. Run the whole sequence in one sitting rather than pushing the
+repo and leaving the package for later:
+
+1. Create the repo and push — it has to exist first, or the README badges and the package page
+   both point at a 404.
+2. Set `PYPI_API_TOKEN`.
+3. Cut the release, which triggers the upload.
+
+The gap between step 1 and step 3 is the only window in which the README's install instruction
+is untrue. Keep it to minutes. If the upload fails, either fix and retry immediately or reword
+the install section — do not leave a published README telling people to run a command that does
+not work.
 
 ## Version bump checklist
 

@@ -6,3 +6,6 @@ __pycache__/
 dist/
 build/
 .coverage
+
+# Operator script: references internal push-gate env vars, stays local
+GO-LIVE.sh

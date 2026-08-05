@@ -13,6 +13,27 @@ to a version no user could see. Nothing errored. Nothing warned. It was caught
 incidentally, not by design. `agent-signage` exists to make that class of
 mistake visible at the moment it would happen, not after.
 
+## Why a sign is temporary and a rule is not
+
+There is a second reason not to put this in `CLAUDE.md`, separate from whether it fires at the
+right moment.
+
+A standing instruction is in context for every request. It is attended to while the model is
+writing a migration, reviewing a diff, or answering something about documentation — not only
+during the situation it was written for. It shapes interpretation and generation across all of
+them. A constraint authored for one narrow case becomes a persistent bias on every case, and a
+file full of such rules trades general capability for a set of reflexes that are irrelevant
+most of the time.
+
+A sign exists only for the tool call that needed it. Before and after, the context is identical
+to a session where this tool was never installed. That property is worth more than the tokens
+it saves: the model is constrained where the constraint is load-bearing, and left alone
+everywhere else.
+
+This is a design argument rather than a measured one. The token cost of a standing rule is easy
+to measure and small. The conditioning cost is not something this project has quantified, and
+the claim is stated here as reasoning, not as a result.
+
 ## Why state-triggered, not wording-triggered
 
 The alternative most people reach for is a line in `CLAUDE.md` or `AGENTS.md`:
