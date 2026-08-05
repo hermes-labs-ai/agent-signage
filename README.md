@@ -10,17 +10,18 @@ and silence the rest of the time.
 ## Contents
 
 - [What it does](#what-it-does)
-- [The signs](#the-signs)
+- [Install](#install)
 - [Why this instead of a rule in your prompt file](#why-this-instead-of-a-rule-in-your-prompt-file)
+- [The signs](#the-signs)
 - [Guarantees](#guarantees)
 - [What it costs](#what-it-costs)
-- [Install](#install)
 - [When it stays quiet](#when-it-stays-quiet)
 - [Acknowledging](#acknowledging)
 - [Configuration](#configuration)
 - [Adding your own sign](#adding-your-own-sign)
 - [Verify it yourself](#verify-it-yourself)
 - [Status and limitations](#status-and-limitations)
+- [Research](#research)
 - [License](#license)
 
 ## What it does
@@ -48,81 +49,6 @@ Inspect: git -C /Users/you/dev/hermes-labs-v2 log --oneline HEAD..@{u}
 
 That text reaches the model alongside the tool result, at the moment it touches the file.
 Not at the start of the session, not in a config file it read twenty turns ago.
-
-## The signs
-
-| Sign | Reports | Fires on |
-|---|---|---|
-| `stale_checkout` | the repo is N commits behind its upstream | read + write |
-| `symlink_escape` | the path resolves through a symlink to outside the repo | read + write |
-| `conflict_markers` | the file still contains unresolved `<<<<<<<` markers | read + write |
-| `concurrent_worktree_edit` | another worktree has uncommitted changes to this same file | write |
-| `binary_edit` | the file contains NUL bytes and a text edit will corrupt it | write |
-| `generated_file` | the file declares itself machine-generated in its header | write |
-
-Each was selected against a documented failure report rather than invented; the evidence is
-cited in the docstring of each sign in `src/agent_signage/more_signs.py`. Signs whose only
-consequence is "what you are about to write will go wrong" fire on writes only — firing them
-on a read would be true but useless, and a true-but-useless sign is how a tool like this gets
-muted.
-
-## Why this instead of a rule in your prompt file
-
-The obvious alternative is a line in `CLAUDE.md` or `AGENTS.md`: *always check the branch is
-current.* That has two costs, and the second one is the reason this project exists.
-
-**It doesn't fire when you need it.** The failure is not a knowledge gap — your agent already
-knows that a local checkout can diverge from what's deployed. It just has no reason to form
-that hypothesis at turn fifteen, mid-task, when nothing in front of it looks wrong. A rule it
-read at turn zero is competing with everything that has happened since.
-
-**It conditions every other task too.** A standing instruction is in context for every request,
-including the ones it has nothing to do with. It is attended to while the model is writing a
-migration, reviewing a diff, or answering a question about documentation — narrowing how it
-interprets and what it generates in all of them. A constraint written for one situation becomes
-a standing bias on every situation. Add enough of them and you have quietly traded general
-capability for a set of reflexes, most of which are irrelevant most of the time.
-
-A sign is present only while the action that needs it is happening. The rest of the time the
-context is exactly as it would have been if this tool were not installed — which is the point.
-Constrain the model where the constraint is load-bearing, and leave it alone everywhere else.
-
-This is a design argument, not a measured result. The token cost is measurable and small; the
-conditioning cost is not something this project has quantified.
-
-## Guarantees
-
-These are asserted by the test suite. If any regresses, CI fails. The reasoning behind each one
-is in [docs/design.md](docs/design.md).
-
-| Property | Guarantee |
-|---|---|
-| **Sound** | Every sign reports a measurement, never an inference. When it speaks, the stated fact is true. |
-| **Non-blocking** | It never emits a block decision and never exits non-zero. It cannot stop a tool call. |
-| **Fails open** | Malformed input, missing git, unwritable state, hung subprocess — all end in silence and exit 0. |
-| **Bounded** | A hard deadline caps every invocation. A pathological repo cannot stall a file read. |
-| **No network on the hot path** | Refreshes happen out-of-band, never inline. Asserted by a test that fails if the measuring call attempts a fetch. |
-| **Zero dependencies** | Python 3.9+ standard library only. |
-| **Quiet** | Each sign speaks once per file per session. Nothing at all when nothing is wrong. |
-
-## What it costs
-
-Measured end-to-end as a subprocess — what your harness actually pays per tool call — on
-macOS/arm64 with CPython 3.14. Numbers live in `evals/metrics-0.1.0.json`.
-
-| Case | Cost |
-|---|---|
-| Bare interpreter floor (`python -c pass`) | ~16 ms |
-| Silent — not a repo, or a vendored path | ~30 ms |
-| Silent — a clean file inside a repo (Read) | ~62 ms |
-| Silent — a clean file inside a repo (Edit) | ~71 ms |
-
-Silence is the common case. Argparse and the git layer load lazily, a parent-directory walk
-rules out non-repos before `git` is spawned, and the six signs share memoised git answers for
-the duration of one evaluation — which took an in-repo edit from 119 ms to 71 ms.
-
-If that is too much for your harness, call it on a subset of events; first-touch-per-directory
-still catches the failures it targets.
 
 ## Install
 
@@ -170,6 +96,81 @@ echo '{"session_id":"abc","tool_input":{"file_path":"/path/to/file.py"}}' | pyth
 Empty output means "nothing to say". Exit code is always 0. A full runnable example (no Claude
 Code needed) is in `examples/README.md`; harness maintainers wiring this in permanently should
 read [docs/integrating.md](docs/integrating.md).
+
+## Why this instead of a rule in your prompt file
+
+The obvious alternative is a line in `CLAUDE.md` or `AGENTS.md`: *always check the branch is
+current.* That has two costs, and the second one is the reason this project exists.
+
+**It doesn't fire when you need it.** The failure is not a knowledge gap — your agent already
+knows that a local checkout can diverge from what's deployed. It just has no reason to form
+that hypothesis at turn fifteen, mid-task, when nothing in front of it looks wrong. A rule it
+read at turn zero is competing with everything that has happened since.
+
+**It conditions every other task too.** A standing instruction is in context for every request,
+including the ones it has nothing to do with. It is attended to while the model is writing a
+migration, reviewing a diff, or answering a question about documentation — narrowing how it
+interprets and what it generates in all of them. A constraint written for one situation becomes
+a standing bias on every situation. Add enough of them and you have quietly traded general
+capability for a set of reflexes, most of which are irrelevant most of the time.
+
+A sign is present only while the action that needs it is happening. The rest of the time the
+context is exactly as it would have been if this tool were not installed — which is the point.
+Constrain the model where the constraint is load-bearing, and leave it alone everywhere else.
+
+This is a design argument, not a measured result. The token cost is measurable and small; the
+conditioning cost is not something this project has quantified.
+
+## The signs
+
+| Sign | Reports | Fires on |
+|---|---|---|
+| `stale_checkout` | the repo is N commits behind its upstream | read + write |
+| `symlink_escape` | the path resolves through a symlink to outside the repo | read + write |
+| `conflict_markers` | the file still contains unresolved `<<<<<<<` markers | read + write |
+| `concurrent_worktree_edit` | another worktree has uncommitted changes to this same file | write |
+| `binary_edit` | the file contains NUL bytes and a text edit will corrupt it | write |
+| `generated_file` | the file declares itself machine-generated in its header | write |
+
+Each was selected against a documented failure report rather than invented; the evidence is
+cited in the docstring of each sign in `src/agent_signage/more_signs.py`. Signs whose only
+consequence is "what you are about to write will go wrong" fire on writes only — firing them
+on a read would be true but useless, and a true-but-useless sign is how a tool like this gets
+muted.
+
+## Guarantees
+
+These are asserted by the test suite. If any regresses, CI fails. The reasoning behind each one
+is in [docs/design.md](docs/design.md).
+
+| Property | Guarantee |
+|---|---|
+| **Sound** | Every sign reports a measurement, never an inference. When it speaks, the stated fact is true. |
+| **Non-blocking** | It never emits a block decision and never exits non-zero. It cannot stop a tool call. |
+| **Fails open** | Malformed input, missing git, unwritable state, hung subprocess — all end in silence and exit 0. |
+| **Bounded** | A hard deadline caps every invocation. A pathological repo cannot stall a file read. |
+| **No network on the hot path** | Refreshes happen out-of-band, never inline. Asserted by a test that fails if the measuring call attempts a fetch. |
+| **Zero dependencies** | Python 3.9+ standard library only. |
+| **Quiet** | Each sign speaks once per file per session. Nothing at all when nothing is wrong. |
+
+## What it costs
+
+Measured end-to-end as a subprocess — what your harness actually pays per tool call — on
+macOS/arm64 with CPython 3.14. Numbers live in `evals/metrics-0.1.0.json`.
+
+| Case | Cost |
+|---|---|
+| Bare interpreter floor (`python -c pass`) | ~16 ms |
+| Silent — not a repo, or a vendored path | ~30 ms |
+| Silent — a clean file inside a repo (Read) | ~62 ms |
+| Silent — a clean file inside a repo (Edit) | ~71 ms |
+
+Silence is the common case. Argparse and the git layer load lazily, a parent-directory walk
+rules out non-repos before `git` is spawned, and the six signs share memoised git answers for
+the duration of one evaluation — which took an in-repo edit from 119 ms to 71 ms.
+
+If that is too much for your harness, call it on a subset of events; first-touch-per-directory
+still catches the failures it targets.
 
 ## When it stays quiet
 
