@@ -1,44 +1,43 @@
-name: Publish
+name: Publish to PyPI
+
+# Token-based, matching the rest of the Hermes Labs stack.
+#
+# The alternative -- PyPI trusted publishing via OIDC -- is more secure but
+# cannot be configured from a CLI: it is a web-only account setting with no
+# API, and twine has no account-management surface. Using the existing
+# user-scoped API token keeps releases scriptable and consistent with how
+# lintlang and the other packages in this org already ship.
+#
+# Requires one repository secret: PYPI_API_TOKEN.
 
 on:
   release:
     types: [published]
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"
 
-      - name: Install build
-        run: pip install build
+      - name: Install build tools
+        run: pip install build twine
 
       - name: Build sdist and wheel
         run: python -m build
 
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
-
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
+      # PyPI runs this on upload anyway. Failing here gives a readable error
+      # instead of a rejected upload after the fact.
+      - name: Validate distributions
+        run: python -m twine check dist/*
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
