@@ -1,0 +1,42 @@
+{
+  "recorded": "2026-08-05",
+  "subject": "prototype stale-checkout hook (principle-staleness-probe d3de0d36)",
+  "phase0_risk_retirement": {
+    "pretooluse_additional_context_reaches_model": {
+      "result": "PROVEN",
+      "method": "throwaway PreToolUse:Read hook injecting a unique token, read back by an isolated claude -p instance",
+      "model_response_verbatim": "PreToolUse:Read hook additional context: ROADSIGN-TEST ZXQV-SIGNAGE-PROBE-7731 - this text was injected by a PreToolUse hook.",
+      "note": "model treated it as content, not as an instruction - sign wording must therefore be factual, not imperative"
+    },
+    "hot_path_interpreter_cost_ms": {
+      "bash_noop": 2.8,
+      "bash_plus_git_rev_parse": 10.6,
+      "venv_python3_3_14_6": 16.6,
+      "system_python3_3_9_6": 18.0,
+      "venv_python3_json_stdin": 17.4,
+      "system_python3_json_stdin": 22.3,
+      "decision": "pure Python. 17ms is within budget; the assumed ~100ms penalty did not reproduce. Single-language hot path.",
+      "consequence": "system python3 is 3.9.6 -> package targets >=3.9, not >=3.10"
+    }
+  },
+  "prototype_measured": {
+    "soundness": "100% by construction (reports git rev-list --count HEAD..@{u})",
+    "false_positives_unrelated_prompts": "0/12",
+    "false_positives_near_miss_corpus": "0/8",
+    "silent_path_ms": 27,
+    "message_chars": 290,
+    "blocks_ever": false
+  },
+  "fetch_staleness_survey": {
+    "note": "coverage is capped by how recently each repo was fetched; this is the gap 0.0.8 closes",
+    "repos": [
+      {"repo": "hermes-labs-v2", "last_fetch": "1 h", "hook_says": "WARN 27 behind"},
+      {"repo": "ai-infra", "last_fetch": "3.1 days", "hook_says": "silent"},
+      {"repo": "hermeneutic", "last_fetch": "3.2 days", "hook_says": "silent"},
+      {"repo": "fidelis", "last_fetch": "22 h", "hook_says": "silent"},
+      {"repo": "lintlang", "last_fetch": "10 h", "hook_says": "WARN 5 behind"},
+      {"repo": "hermes-rubric", "last_fetch": "20 h", "hook_says": "silent"},
+      {"repo": "little-canary", "last_fetch": "4.4 days", "hook_says": "silent"}
+    ]
+  }
+}
