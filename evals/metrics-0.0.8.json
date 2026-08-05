@@ -43,7 +43,7 @@
     "One sign per repo per session; if upstream advances mid-session there is no second warning until the next session."
   ],
   "live_verification_2026_08_05": {
-    "harness": "Claude Code, registered PreToolUse hook wrapped by run.sh, real settings.json",
+    "harness": "Claude Code, registered PreToolUse hook, real settings.json",
     "delivery_proven": "isolated session quoted the injected token back verbatim",
     "self_healing_freshness": {
       "repo": "github-projects/lintlang",
@@ -57,6 +57,6 @@
       "vendored_paths": "silent",
       "malformed_and_empty_input": "silent"
     },
-    "regression_check": "all 6 pre-existing Bash PreToolUse hooks intact after wiring, public-repo-gate still active"
+    "regression_check": "all pre-existing PreToolUse hooks intact after wiring"
   }
 }
