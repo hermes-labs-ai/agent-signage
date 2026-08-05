@@ -12,7 +12,7 @@ pip install -e ".[dev]"
 ## Running the checks
 
 ```bash
-pytest                    # 40 tests, real synthetic git repos, no mocking of git
+pytest                    # 68 tests, real synthetic git repos, no mocking of git
 ruff check src tests      # lint
 agent-signage selftest    # runtime guarantees, no repo needed
 ```

@@ -3,9 +3,39 @@
 **Road signs for coding agents.** One true fact, delivered at the moment your agent acts —
 and silence the rest of the time.
 
-Your agent opens a repo and starts fixing things. The checkout is 26 commits behind the branch
-you actually deploy. Every edit is correct, well-tested, and applied to a version nobody can
-see. Nothing errors. Nothing warns. You find out later, if you find out at all.
+[![CI](https://github.com/hermes-labs-ai/agent-signage/actions/workflows/ci.yml/badge.svg)](https://github.com/hermes-labs-ai/agent-signage/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
+
+## Contents
+
+- [What it does](#what-it-does)
+- [The signs](#the-signs)
+- [Why this instead of a rule in your prompt file](#why-this-instead-of-a-rule-in-your-prompt-file)
+- [Guarantees](#guarantees)
+- [What it costs](#what-it-costs)
+- [Install](#install)
+- [When it stays quiet](#when-it-stays-quiet)
+- [Acknowledging](#acknowledging)
+- [Configuration](#configuration)
+- [Adding your own sign](#adding-your-own-sign)
+- [Verify it yourself](#verify-it-yourself)
+- [Status and limitations](#status-and-limitations)
+- [License](#license)
+
+## What it does
+
+`agent-signage` is a PreToolUse hook for AI coding agents — a Claude Code hook today, and,
+being a plain subprocess, usable in any harness that can shell out before a file operation.
+Before a Read, Edit, Write, Grep, or Glob call runs, it checks measurable facts about the git
+state of the file about to be touched — is the checkout behind its upstream, is another `git
+worktree` mid-edit on the same file, does a symlink point outside the repo — and injects one
+short line into the agent's context if something matters. The rest of the time it says nothing.
+
+Your agent opens a repo and starts fixing things. The checkout is on a stale branch, 26 commits
+behind the branch you actually deploy. Every edit is correct, well-tested, and applied to a
+version nobody can see. Nothing errors. Nothing warns. You find out later, if you find out at
+all.
 
 `agent-signage` puts a sign on that road:
 
@@ -19,6 +49,23 @@ Inspect: git -C /Users/you/dev/hermes-labs-v2 log --oneline HEAD..@{u}
 That text reaches the model alongside the tool result, at the moment it touches the file.
 Not at the start of the session, not in a config file it read twenty turns ago.
 
+## The signs
+
+| Sign | Reports | Fires on |
+|---|---|---|
+| `stale_checkout` | the repo is N commits behind its upstream | read + write |
+| `symlink_escape` | the path resolves through a symlink to outside the repo | read + write |
+| `conflict_markers` | the file still contains unresolved `<<<<<<<` markers | read + write |
+| `concurrent_worktree_edit` | another worktree has uncommitted changes to this same file | write |
+| `binary_edit` | the file contains NUL bytes and a text edit will corrupt it | write |
+| `generated_file` | the file declares itself machine-generated in its header | write |
+
+Each was selected against a documented failure report rather than invented; the evidence is
+cited in the docstring of each sign in `src/agent_signage/more_signs.py`. Signs whose only
+consequence is "what you are about to write will go wrong" fire on writes only — firing them
+on a read would be true but useless, and a true-but-useless sign is how a tool like this gets
+muted.
+
 ## Why this instead of a rule in your prompt file
 
 A line in `CLAUDE.md` or `AGENTS.md` saying "always check the branch is current" costs tokens
@@ -31,7 +78,8 @@ fifteen, in the middle of a task, when everything looks normal.
 
 ## Guarantees
 
-These are asserted by the test suite. If any regresses, CI fails.
+These are asserted by the test suite. If any regresses, CI fails. The reasoning behind each one
+is in [docs/design.md](docs/design.md).
 
 | Property | Guarantee |
 |---|---|
@@ -64,9 +112,31 @@ still catches the failures it targets.
 
 ## Install
 
+Requires Python 3.9+ and `git` on `PATH`. No package dependencies either way.
+
+### From source (works now)
+
+```bash
+pip install git+https://github.com/hermes-labs-ai/agent-signage.git
+```
+
+Or clone it first:
+
+```bash
+git clone https://github.com/hermes-labs-ai/agent-signage.git
+cd agent-signage
+pip install .
+```
+
+### From PyPI (not published yet)
+
+`agent-signage` is not on PyPI yet. Once it is, this will work:
+
 ```bash
 pip install agent-signage
 ```
+
+Until then, use the source install above.
 
 ### Claude Code
 
@@ -97,7 +167,9 @@ It is a subprocess that reads JSON on stdin and writes JSON or nothing on stdout
 echo '{"session_id":"abc","tool_input":{"file_path":"/path/to/file.py"}}' | python3 -m agent_signage
 ```
 
-Empty output means "nothing to say". Exit code is always 0.
+Empty output means "nothing to say". Exit code is always 0. A full runnable example (no Claude
+Code needed) is in `examples/README.md`; harness maintainers wiring this in permanently should
+read [docs/integrating.md](docs/integrating.md).
 
 ## When it stays quiet
 
@@ -157,24 +229,7 @@ agent-signage selftest        # asserts the runtime guarantees, no repo needed
 pytest                        # full behavioural suite over real synthetic git repos
 ```
 
-## The signs
-
-| Sign | Reports | Fires on |
-|---|---|---|
-| `stale_checkout` | the repo is N commits behind its upstream | read + write |
-| `symlink_escape` | the path resolves through a symlink to outside the repo | read + write |
-| `conflict_markers` | the file still contains unresolved `<<<<<<<` markers | read + write |
-| `concurrent_worktree_edit` | another worktree has uncommitted changes to this same file | write |
-| `binary_edit` | the file contains NUL bytes and a text edit will corrupt it | write |
-| `generated_file` | the file declares itself machine-generated in its header | write |
-
-Each was selected against a documented failure report rather than invented; the evidence is
-cited in the docstring of each sign in `src/agent_signage/more_signs.py`. Signs whose only
-consequence is "what you are about to write will go wrong" fire on writes only — firing them
-on a read would be true but useless, and a true-but-useless sign is how a tool like this gets
-muted.
-
-## Status
+## Status and limitations
 
 `0.1.0` — early, and honest about it. Six signs, 68 tests over real synthetic git repositories,
 in production use at Hermes Labs. The sign registry is stable and extensible.

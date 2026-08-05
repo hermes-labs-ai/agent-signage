@@ -52,7 +52,8 @@ runs the hook against it exactly as a harness would, so the input and output
 below are not illustrative — they are what the commands actually produce.
 
 ```bash
-pip install agent-signage
+# PyPI release pending; install from source for now
+pip install git+https://github.com/hermes-labs-ai/agent-signage.git
 
 WORK=$(mktemp -d)
 git init -q -b main "$WORK/origin"

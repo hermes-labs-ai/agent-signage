@@ -2,8 +2,8 @@
 
 This document draws directly from the module docstrings in `src/agent_signage/`
 and from the commit that shipped 0.0.8. It explains the choices, not the
-mechanics — the mechanics are the code and the 40 tests in
-`tests/test_stale_checkout.py`, which are the specification.
+mechanics — the mechanics are the code and the 68 tests in `tests/`, which are
+the specification.
 
 ## Origin
 
