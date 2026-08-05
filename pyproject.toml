@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-signage"
-version = "0.0.8"
+version = "0.1.0"
 description = "Road signs for coding agents: one true fact at the moment of action, silence otherwise"
 readme = "README.md"
 license = "Apache-2.0"
@@ -43,7 +43,10 @@ Issues = "https://github.com/hermes-labs-ai/agent-signage/issues"
 agent-signage = "agent_signage.__main__:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "ruff>=0.6"]
+# ruff pinned exactly: newer minors have broadened the default-enabled rule set
+# (verified 0.15.5 clean / 0.16.1 not, identical source), and CI reproducibility
+# matters more here than tracking latest.
+dev = ["pytest>=7", "ruff>=0.15"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_signage"]
@@ -51,6 +54,15 @@ packages = ["src/agent_signage"]
 [tool.ruff]
 line-length = 100
 target-version = "py39"
+
+# Selected explicitly, not inherited. Ruff's default rule set widens between
+# releases, so an unpinned dev dependency would silently change what CI
+# enforces and break a fresh clone that resolves a newer ruff than the last
+# contributor had. Pinning the tool would only defer that; pinning the rules
+# fixes it.
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]  # pycodestyle, pyflakes, warnings, import order
+ignore = ["E501"]  # line length is enforced by the formatter, not the linter
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -9,6 +9,7 @@ cannot be wrong about the fact it states.
 
 from __future__ import annotations
 
+import functools
 import os
 import subprocess
 import time
@@ -18,6 +19,16 @@ from typing import NamedTuple, Optional
 # that says nothing, so every subprocess is bounded and every timeout is a
 # silent None.
 GIT_TIMEOUT_S = 2.0
+
+# Six signs run per invocation and ask overlapping questions about the same
+# repository. Without memoisation each one re-spawns git, which measured at
+# ~119ms for a single edit inside a repo.
+#
+# The cache is correct only *within* one evaluation. Repository state changes
+# between tool calls, so anything embedding this library in a long-lived
+# process must reset it each time -- `hook.run()` does. The caches are listed
+# explicitly rather than discovered, so adding a memoised function without
+# registering it here fails the test that asserts they are all reset.
 
 
 def _git(root: Optional[str], *args: str, timeout: float = GIT_TIMEOUT_S) -> Optional[str]:
@@ -44,6 +55,7 @@ def _git(root: Optional[str], *args: str, timeout: float = GIT_TIMEOUT_S) -> Opt
         return None
 
 
+@functools.lru_cache(maxsize=256)
 def _has_git_ancestor(start: str) -> bool:
     """Cheap filesystem check for a `.git` entry at or above `start`.
 
@@ -63,6 +75,7 @@ def _has_git_ancestor(start: str) -> bool:
         d = parent
 
 
+@functools.lru_cache(maxsize=64)
 def repo_root(path: str) -> Optional[str]:
     """Toplevel of the repo containing `path`, or None if it is not in one."""
     d = path if os.path.isdir(path) else os.path.dirname(path)
@@ -75,6 +88,7 @@ def repo_root(path: str) -> Optional[str]:
     return _git(d, "rev-parse", "--show-toplevel")
 
 
+@functools.lru_cache(maxsize=64)
 def git_dir(root: str) -> Optional[str]:
     """Absolute .git directory for `root`. Worktrees do not have a .git dir at
     the toplevel -- they have a .git *file* pointing elsewhere -- so this must
@@ -83,21 +97,25 @@ def git_dir(root: str) -> Optional[str]:
     return d if d and os.path.isdir(d) else None
 
 
+@functools.lru_cache(maxsize=64)
 def current_branch(root: str) -> Optional[str]:
     """Branch name, or None when HEAD is detached."""
     b = _git(root, "symbolic-ref", "--quiet", "--short", "HEAD")
     return b or None
 
 
+@functools.lru_cache(maxsize=64)
 def upstream_ref(root: str) -> Optional[str]:
     """Configured upstream for HEAD, e.g. 'origin/main'. None if unset."""
     return _git(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
 
 
+@functools.lru_cache(maxsize=64)
 def upstream_sha(root: str, upstream: str) -> Optional[str]:
     return _git(root, "rev-parse", upstream)
 
 
+@functools.lru_cache(maxsize=64)
 def commits_behind(root: str, upstream: str) -> Optional[int]:
     """How many commits HEAD is behind `upstream`, per the last fetch.
 
@@ -115,6 +133,7 @@ def commits_behind(root: str, upstream: str) -> Optional[int]:
         return None
 
 
+@functools.lru_cache(maxsize=64)
 def upstream_commit_age(root: str, upstream: str) -> Optional[str]:
     """Human-readable age of the upstream tip, e.g. '3 hours ago'."""
     return _git(root, "log", "-1", "--format=%cr", upstream)
@@ -197,3 +216,21 @@ def spawn_background_fetch(root: str) -> bool:
         return True
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+_CACHED = (
+    _has_git_ancestor,
+    repo_root,
+    git_dir,
+    current_branch,
+    upstream_ref,
+    upstream_sha,
+    commits_behind,
+    upstream_commit_age,
+)
+
+
+def clear_caches() -> None:
+    """Drop every memoised git answer. Call once per evaluation."""
+    for fn in _CACHED:
+        fn.cache_clear()

@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-from agent_signage import gitfacts, hook, signs, state
+from agent_signage import gitfacts, hook, more_signs, signs, state  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("isolated_state")
 
@@ -43,6 +43,10 @@ def isolated_state(tmp_path, monkeypatch):
     d = tmp_path / "state"
     d.mkdir()
     monkeypatch.setenv("AGENT_SIGNAGE_STATE_DIR", str(d))
+    # Tests that call signs directly bypass hook.run(), which is what normally
+    # resets the per-evaluation memoisation.
+    gitfacts.clear_caches()
+    more_signs.clear_caches()
     monkeypatch.delenv("AGENT_SIGNAGE_IGNORE", raising=False)
     monkeypatch.delenv("AGENT_SIGNAGE_SESSION_START", raising=False)
     return d
@@ -205,6 +209,9 @@ def test_ack_expires_when_upstream_moves(behind_repo):
     ).stdout.decode().strip()
     commit(type(behind_repo)(origin), "e.txt")
     git(behind_repo, "fetch", "-q")
+    # In production the next tool call is a new process with empty caches;
+    # hook.run() does this reset itself. Direct sign calls must do it here.
+    gitfacts.clear_caches()
 
     again = signs.stale_checkout(ctx_for(behind_repo / "a.txt", session="other"))
     assert again is not None, "upstream moved; the old ack must not apply"

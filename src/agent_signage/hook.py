@@ -26,7 +26,6 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
-
 # Whole-invocation ceiling. Past this the hook stops and says nothing, so a
 # pathological repository can never stall a file read.
 DEADLINE_S = 3.0
@@ -95,7 +94,13 @@ def run(raw: str, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
 
     # Deferred: importing the git layer costs real milliseconds and is wasted
     # when the payload has no usable path, which is common.
-    from . import signs, state
+    from . import gitfacts, more_signs, signs, state  # noqa: F401  (import registers signs)
+
+    # Memoisation inside the signs is only valid for one evaluation: repository
+    # state changes between tool calls. Reset it here so embedding this in a
+    # long-lived process is as correct as the one-shot subprocess case.
+    gitfacts.clear_caches()
+    more_signs.clear_caches()
 
     ctx = signs.Context(
         session_id=session_id,

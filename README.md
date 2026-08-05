@@ -35,13 +35,32 @@ These are asserted by the test suite. If any regresses, CI fails.
 
 | Property | Guarantee |
 |---|---|
-| **Sound** | It reports `git rev-list --count HEAD..@{u}`. When it speaks, the fact is true. |
+| **Sound** | Every sign reports a measurement, never an inference. When it speaks, the stated fact is true. |
 | **Non-blocking** | It never emits a block decision and never exits non-zero. It cannot stop a tool call. |
 | **Fails open** | Malformed input, missing git, unwritable state, hung subprocess — all end in silence and exit 0. |
 | **Bounded** | A hard deadline caps every invocation. A pathological repo cannot stall a file read. |
 | **No network on the hot path** | Refreshes happen out-of-band, never inline. Asserted by a test that fails if the measuring call attempts a fetch. |
 | **Zero dependencies** | Python 3.9+ standard library only. |
-| **Quiet** | One sign per repo per session. Nothing at all when nothing is wrong. |
+| **Quiet** | Each sign speaks once per file per session. Nothing at all when nothing is wrong. |
+
+## What it costs
+
+Measured end-to-end as a subprocess — what your harness actually pays per tool call — on
+macOS/arm64 with CPython 3.14. Numbers live in `evals/metrics-0.1.0.json`.
+
+| Case | Cost |
+|---|---|
+| Bare interpreter floor (`python -c pass`) | ~16 ms |
+| Silent — not a repo, or a vendored path | ~30 ms |
+| Silent — a clean file inside a repo (Read) | ~62 ms |
+| Silent — a clean file inside a repo (Edit) | ~71 ms |
+
+Silence is the common case. Argparse and the git layer load lazily, a parent-directory walk
+rules out non-repos before `git` is spawned, and the six signs share memoised git answers for
+the duration of one evaluation — which took an in-repo edit from 119 ms to 71 ms.
+
+If that is too much for your harness, call it on a subset of events; first-touch-per-directory
+still catches the failures it targets.
 
 ## Install
 
@@ -89,7 +108,7 @@ Silence is the default and the common case. It deliberately says nothing when:
 - the path is vendored or generated (`node_modules`, `vendor`, `.venv`, `dist`, `build`, …)
 - your agent already fetched during this session, so it has current knowledge
 - remote knowledge is too old to be meaningful — it refreshes in the background and stays quiet this turn
-- it already told you about this repo in this session
+- it already told you this about this file in this session
 - you acknowledged it (see below)
 
 **Silence never means "verified current."** It means "no drift known." That distinction is
@@ -138,11 +157,36 @@ agent-signage selftest        # asserts the runtime guarantees, no repo needed
 pytest                        # full behavioural suite over real synthetic git repos
 ```
 
+## The signs
+
+| Sign | Reports | Fires on |
+|---|---|---|
+| `stale_checkout` | the repo is N commits behind its upstream | read + write |
+| `symlink_escape` | the path resolves through a symlink to outside the repo | read + write |
+| `conflict_markers` | the file still contains unresolved `<<<<<<<` markers | read + write |
+| `concurrent_worktree_edit` | another worktree has uncommitted changes to this same file | write |
+| `binary_edit` | the file contains NUL bytes and a text edit will corrupt it | write |
+| `generated_file` | the file declares itself machine-generated in its header | write |
+
+Each was selected against a documented failure report rather than invented; the evidence is
+cited in the docstring of each sign in `src/agent_signage/more_signs.py`. Signs whose only
+consequence is "what you are about to write will go wrong" fire on writes only — firing them
+on a read would be true but useless, and a true-but-useless sign is how a tool like this gets
+muted.
+
 ## Status
 
-`0.0.8` — early. One sign (`stale_checkout`), fully tested, in production use at Hermes Labs.
-The sign registry is stable; more signs are in progress. Read the tests before adopting: they
-are the specification.
+`0.1.0` — early, and honest about it. Six signs, 68 tests over real synthetic git repositories,
+in production use at Hermes Labs. The sign registry is stable and extensible.
+
+Two limits worth knowing before you adopt:
+
+- **Coverage is capped by fetch freshness.** `stale_checkout` reports drift only as recent as
+  the last fetch. It refreshes in the background when its knowledge is stale, but it can miss
+  drift. It cannot invent it.
+- **The guarantees are self-attested.** They are asserted by this repository's own test suite,
+  which is a real bar but not an independent one. Nobody outside the project has exercised it
+  adversarially yet. Read the tests — they are the specification.
 
 ## License
 

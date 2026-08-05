@@ -10,7 +10,7 @@ import os
 import sys
 from typing import List, Optional
 
-from . import __version__, hook, signs, state
+from . import __version__, hook, more_signs, signs, state  # noqa: F401
 
 
 def _cmd_ack(args) -> int:
@@ -55,7 +55,7 @@ def _cmd_selftest(args) -> int:
         "vendored path is silent",
         hook.run('{"tool_input":{"file_path":"/tmp/x/node_modules/p/i.js"}}') is None,
     )
-    check("at least one sign registered", len(signs.registered()) >= 1)
+    check("all signs registered", len(signs.registered()) >= 6)
     check(
         "envelope shape is correct",
         hook.build_output(["t"])["hookSpecificOutput"]["hookEventName"] == "PreToolUse",

@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches 1.0. Before 1.0, minor version bumps may include breaking changes.
 
+## [0.1.0] - 2026-08-05
+
+### Added
+- Five signs, each selected against a documented failure report rather than invented:
+  `symlink_escape` (a path resolving through a symlink to outside the repository),
+  `conflict_markers` (unresolved merge markers still in the file),
+  `concurrent_worktree_edit` (another worktree has uncommitted changes to the same file),
+  `binary_edit` (NUL bytes present, so a text-shaped edit corrupts the file), and
+  `generated_file` (the header declares the file machine-generated).
+- `clear_caches()` on the git and content layers, called at the start of every evaluation, so
+  embedding the library in a long-lived process is as correct as the one-shot subprocess.
+- `docs/integrating.md` for harness maintainers: the stdin/stdout contract, the measured cost,
+  and the five things this will never do.
+
+### Changed
+- Signs whose only consequence is a bad write now fire on write-shaped tools only.
+- Git answers are memoised for the duration of one evaluation. An edit inside a repository went
+  from 119 ms to 71 ms; six signs were each re-spawning git to ask the same questions.
+- Ruff rules are now selected explicitly instead of inherited. The default set widens between
+  releases, so an unpinned dev dependency silently changed what CI enforced — a fresh clone
+  resolving a newer ruff would have failed CI on code that was clean when written.
+
+### Fixed
+- Deduplication is keyed per file, not per repository, so a second affected file in the same
+  session is still reported.
+
 ## [0.0.8] - 2026-08-05
 
 ### Added
