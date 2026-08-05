@@ -41,5 +41,22 @@
     "Bash-invoked file edits (cat, sed -i, shell scripts) carry no tool path and are not seen.",
     "Git only. A stale deployed API, database, or service is out of scope.",
     "One sign per repo per session; if upstream advances mid-session there is no second warning until the next session."
-  ]
+  ],
+  "live_verification_2026_08_05": {
+    "harness": "Claude Code, registered PreToolUse hook wrapped by run.sh, real settings.json",
+    "delivery_proven": "isolated session quoted the injected token back verbatim",
+    "self_healing_freshness": {
+      "repo": "github-projects/lintlang",
+      "call_1": "silent - fetch state was 10h old, past the 30min TTL, background refresh spawned",
+      "call_2": "STALE CHECKOUT - lintlang is 5 commit(s) behind origin/main (upstream tip 2 days ago)",
+      "note": "converged in one round trip with no network on either measuring call; surfaced a real drift that was not otherwise known"
+    },
+    "suppression_live": {
+      "up_to_date_repos": "silent",
+      "non_repo_paths": "silent",
+      "vendored_paths": "silent",
+      "malformed_and_empty_input": "silent"
+    },
+    "regression_check": "all 6 pre-existing Bash PreToolUse hooks intact after wiring, public-repo-gate still active"
+  }
 }
