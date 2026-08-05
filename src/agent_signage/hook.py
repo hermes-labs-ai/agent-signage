@@ -26,7 +26,6 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
-from . import signs, state
 
 # Whole-invocation ceiling. Past this the hook stops and says nothing, so a
 # pathological repository can never stall a file read.
@@ -93,6 +92,10 @@ def run(raw: str, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
         # the parent pid keeps the scope to this process tree rather than
         # making the stamp effectively permanent.
         session_id = "pid-%d" % os.getppid()
+
+    # Deferred: importing the git layer costs real milliseconds and is wasted
+    # when the payload has no usable path, which is common.
+    from . import signs, state
 
     ctx = signs.Context(
         session_id=session_id,

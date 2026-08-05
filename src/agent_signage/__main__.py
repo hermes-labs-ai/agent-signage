@@ -6,7 +6,6 @@ path: acknowledging a sign, clearing state, and proving the install works.
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 from typing import List, Optional
@@ -14,24 +13,24 @@ from typing import List, Optional
 from . import __version__, hook, signs, state
 
 
-def _cmd_ack(args: argparse.Namespace) -> int:
+def _cmd_ack(args) -> int:
     p = state.acknowledge(args.repo, args.sign, args.token)
     print("acknowledged %s for %s (%s)" % (args.sign, args.repo, p))
     return 0
 
 
-def _cmd_clear(args: argparse.Namespace) -> int:
+def _cmd_clear(args) -> int:
     print("cleared %d stamp(s) from %s" % (state.clear(), state.state_dir()))
     return 0
 
 
-def _cmd_signs(args: argparse.Namespace) -> int:
+def _cmd_signs(args) -> int:
     for name in signs.registered():
         print(name)
     return 0
 
 
-def _cmd_selftest(args: argparse.Namespace) -> int:
+def _cmd_selftest(args) -> int:
     """Assert the guarantees without needing a repository.
 
     These are the properties a consumer is trusting; if any regress, this exits
@@ -74,7 +73,7 @@ def _cmd_selftest(args: argparse.Namespace) -> int:
 _MATCHER = "Read|Edit|Write|NotebookEdit|Grep|Glob"
 
 
-def _cmd_install(args: argparse.Namespace) -> int:
+def _cmd_install(args) -> int:
     """Add the PreToolUse entry to a Claude Code settings file.
 
     Idempotent: re-running never duplicates the entry. Writes a timestamped
@@ -136,6 +135,16 @@ def _cmd_install(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    import argparse
+
+    # Hot path: invoked as a hook with no arguments. Skip argparse and the
+    # subcommand wiring entirely -- this runs in front of every file operation,
+    # so the common case must not pay for the CLI it is not using.
+    if argv is None and len(sys.argv) == 1:
+        from . import hook as _hook
+
+        return _hook.main()
+
     ap = argparse.ArgumentParser(
         prog="agent-signage",
         description="Road signs for coding agents. Reads a hook payload on stdin.",

@@ -1,0 +1,45 @@
+{
+  "version": "0.0.8",
+  "recorded": "2026-08-05",
+  "machine": "macOS arm64, python 3.14.6, git Git-154)",
+  "reproduce": "python3 -m pytest tests/ -q && agent-signage selftest",
+  "tests": {
+    "suite": "........................................                                 [100%]",
+    "count": 40,
+    "selftest_checks": 10
+  },
+  "latency_ms_per_invocation": {
+    "measurement": "end-to-end subprocess, exactly what the harness pays per tool call",
+    "interpreter_floor_python_c_pass": 15.6,
+    "silent_non_repo_path": 32.4,
+    "silent_vendored_path": 32.0,
+    "speaking_real_repo": 95.2,
+    "note": "Silence is the common case. The floor is the cost of starting python at all, which any subprocess hook pays. Argparse and the git layer are imported lazily so the silent path stays near that floor. The speaking case runs several git queries and happens at most once per repo per session."
+  },
+  "message": {
+    "chars": 311,
+    "approx_tokens": 77,
+    "lines": 1
+  },
+  "guarantees_asserted_by_tests": [
+    "never emits a block decision (test_output_envelope_shape)",
+    "always exits 0 (test_main_always_exits_zero)",
+    "silent on malformed/empty/absent input (9 parametrised cases)",
+    "no network on the measuring path (test_never_fetches_on_the_hot_path)",
+    "background refresh bounded to one per cooldown (test_no_fetch_storm)",
+    "ack cannot mute new information (test_ack_expires_when_upstream_moves)",
+    "new session is warned again (test_speaks_again_in_a_new_session)",
+    "a raising sign cannot kill the others (test_sign_that_raises_is_dropped_not_fatal)"
+  ],
+  "false_positive_corpora": {
+    "note": "carried forward from the 0.0.7 prototype measurement; the suppression set only widened in 0.0.8",
+    "unrelated_prompts": "0/12",
+    "near_miss_prompts": "0/8"
+  },
+  "known_limits": [
+    "Coverage is capped by fetch freshness: it reports drift only as recent as the last fetch. It can miss drift; it cannot invent it.",
+    "Bash-invoked file edits (cat, sed -i, shell scripts) carry no tool path and are not seen.",
+    "Git only. A stale deployed API, database, or service is out of scope.",
+    "One sign per repo per session; if upstream advances mid-session there is no second warning until the next session."
+  ]
+}

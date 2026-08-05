@@ -44,11 +44,34 @@ def _git(root: Optional[str], *args: str, timeout: float = GIT_TIMEOUT_S) -> Opt
         return None
 
 
+def _has_git_ancestor(start: str) -> bool:
+    """Cheap filesystem check for a `.git` entry at or above `start`.
+
+    Spawning git costs ~10ms; walking parent directories costs microseconds.
+    Since most paths an agent touches are either not in a repo at all or are
+    resolved many times over a session, this short-circuit keeps the silent
+    path close to bare interpreter startup. A `.git` *file* counts as well as a
+    directory -- that is what worktrees and submodules use.
+    """
+    d = os.path.abspath(start)
+    while True:
+        if os.path.exists(os.path.join(d, ".git")):
+            return True
+        parent = os.path.dirname(d)
+        if parent == d:
+            return False
+        d = parent
+
+
 def repo_root(path: str) -> Optional[str]:
     """Toplevel of the repo containing `path`, or None if it is not in one."""
     d = path if os.path.isdir(path) else os.path.dirname(path)
     if not d or not os.path.isdir(d):
         return None
+    if not _has_git_ancestor(d):
+        return None
+    # Still ask git for the answer: only git resolves worktrees, submodules and
+    # GIT_DIR overrides correctly. The walk above is a filter, not a substitute.
     return _git(d, "rev-parse", "--show-toplevel")
 
 
