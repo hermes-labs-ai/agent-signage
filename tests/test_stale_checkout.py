@@ -14,6 +14,7 @@ import subprocess
 import time
 
 import pytest
+from conftest import commit, git
 
 from agent_signage import gitfacts, hook, more_signs, signs, state  # noqa: F401
 
@@ -21,63 +22,6 @@ pytestmark = pytest.mark.usefixtures("isolated_state")
 
 
 # --------------------------------------------------------------------- helpers
-
-def git(repo, *args, check=True):
-    return subprocess.run(
-        ["git", "-C", str(repo)] + list(args),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=check,
-    )
-
-
-def commit(repo, name, content="x"):
-    (repo / name).write_text(content)
-    git(repo, "add", name)
-    git(repo, "commit", "-m", "add %s" % name)
-
-
-@pytest.fixture
-def isolated_state(tmp_path, monkeypatch):
-    """Never touch the developer's real stamp directory."""
-    d = tmp_path / "state"
-    d.mkdir()
-    monkeypatch.setenv("AGENT_SIGNAGE_STATE_DIR", str(d))
-    # Tests that call signs directly bypass hook.run(), which is what normally
-    # resets the per-evaluation memoisation.
-    gitfacts.clear_caches()
-    more_signs.clear_caches()
-    monkeypatch.delenv("AGENT_SIGNAGE_IGNORE", raising=False)
-    monkeypatch.delenv("AGENT_SIGNAGE_SESSION_START", raising=False)
-    return d
-
-
-@pytest.fixture
-def behind_repo(tmp_path):
-    """A clone that is genuinely 3 commits behind its origin, freshly fetched."""
-    origin = tmp_path / "origin"
-    origin.mkdir()
-    git(origin, "init", "-q", "-b", "main")
-    git(origin, "config", "user.email", "t@t.t")
-    git(origin, "config", "user.name", "t")
-    commit(origin, "a.txt")
-
-    clone = tmp_path / "clone"
-    subprocess.run(
-        ["git", "clone", "-q", str(origin), str(clone)],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    git(clone, "config", "user.email", "t@t.t")
-    git(clone, "config", "user.name", "t")
-
-    for n in ("b.txt", "c.txt", "d.txt"):
-        commit(origin, n)
-
-    git(clone, "fetch", "-q")
-    return clone
-
 
 def ctx_for(path, session="s1", **kw):
     return signs.Context(session_id=session, tool_name="Read", target_path=str(path), **kw)
@@ -219,13 +163,245 @@ def test_ack_expires_when_upstream_moves(behind_repo):
 
 # ------------------------------------------------------- freshness / fetching
 
-def test_stale_fetch_state_is_silent_and_refreshes(behind_repo, monkeypatch):
+def test_stale_fetch_state_still_reports_and_refreshes(behind_repo, monkeypatch):
+    """The 0.1.1 defect, inverted into a guarantee.
+
+    Up to 0.1.1 an old fetch made this return None before `commits_behind` was
+    ever called, so a session that touched a repo once -- the common case -- got
+    nothing. The measurement was on disk the whole time. It is now reported and
+    dated, and the background refresh still happens.
+    """
     calls = []
     monkeypatch.setattr(gitfacts, "spawn_background_fetch", lambda r: calls.append(r) or True)
-    monkeypatch.setattr(gitfacts, "fetch_age_seconds", lambda g: 99999.0)
+    monkeypatch.setattr(gitfacts, "fetch_age_seconds", lambda g: 4 * 86400.0)
 
+    s = signs.stale_checkout(ctx_for(behind_repo / "a.txt"))
+    assert s is not None, "an old fetch must not discard a measurement already on disk"
+    assert "3 commit(s) behind origin/main" in s.text
+    assert "as of its last fetch, 4 days ago" in s.text, "the reading must carry its date"
+    assert "the gap now is unmeasured" in s.text, "must not imply the count is current"
+    assert "fetch &&" in s.text, "the resolving command must start by fetching"
+    assert len(calls) == 1, "and the background refresh still happens"
+
+
+def test_stale_reading_is_dated_not_inflated(behind_repo, monkeypatch):
+    """Soundness under an old fetch: report what git counted, claim nothing more.
+
+    'At least N behind' would be an inference -- upstream can be rewound, which
+    makes the true gap smaller, not larger. The sign states the count git
+    computed and the moment it was computed, and calls the present unmeasured.
+    """
+    monkeypatch.setattr(gitfacts, "fetch_age_seconds", lambda g: 4 * 86400.0)
+    monkeypatch.setattr(gitfacts, "spawn_background_fetch", lambda r: True)
+    real = int(
+        subprocess.run(
+            ["git", "-C", str(behind_repo), "rev-list", "--count", "HEAD..origin/main"],
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout.strip()
+    )
+    s = signs.stale_checkout(ctx_for(behind_repo / "a.txt"))
+    assert "%d commit(s) behind" % real in s.text
+    assert "at least" not in s.text.lower()
+
+
+def test_never_fetched_repo_says_so(behind_repo, monkeypatch):
+    """No FETCH_HEAD means the ref is whatever `git clone` wrote. Say that."""
+    monkeypatch.setattr(gitfacts, "fetch_age_seconds", lambda g: None)
+    monkeypatch.setattr(gitfacts, "spawn_background_fetch", lambda r: True)
+    s = signs.stale_checkout(ctx_for(behind_repo / "a.txt"))
+    assert s is not None
+    assert "never fetched" in s.text
+
+
+def test_current_repo_stays_silent_however_old_the_fetch(behind_repo, monkeypatch):
+    """Silence still means 'no drift known'. Reporting an old reading must not
+    turn into asserting drift that the ref on disk does not show."""
+    monkeypatch.setattr(gitfacts, "fetch_age_seconds", lambda g: 400 * 86400.0)
+    monkeypatch.setattr(gitfacts, "spawn_background_fetch", lambda r: True)
+    git(behind_repo, "merge", "-q", "origin/main")
+    gitfacts.clear_caches()
     assert signs.stale_checkout(ctx_for(behind_repo / "a.txt")) is None
-    assert calls == [str(behind_repo)] or len(calls) == 1
+
+
+def test_reports_ahead_when_diverged(behind_repo):
+    """A diverged tree needs a different resolution than one that is purely
+    behind, and `ahead` is one more integer git already knows."""
+    commit(behind_repo, "local.txt")
+    gitfacts.clear_caches()
+    s = signs.stale_checkout(ctx_for(behind_repo / "a.txt"))
+    assert "3 commit(s) behind origin/main and 1 ahead" in s.text
+
+
+def test_no_ahead_clause_when_purely_behind(behind_repo):
+    s = signs.stale_checkout(ctx_for(behind_repo / "a.txt"))
+    assert " ahead" not in s.text
+
+
+def test_ack_survives_a_local_commit(behind_repo):
+    """`ahead` is deliberately outside the ack token: committing locally is not
+    new information about how far behind upstream this tree is."""
+    s = signs.stale_checkout(ctx_for(behind_repo / "a.txt"))
+    state.acknowledge(s.repo, s.id, s.state_token)
+    commit(behind_repo, "local.txt")
+    gitfacts.clear_caches()
+    assert signs.stale_checkout(ctx_for(behind_repo / "a.txt", session="other")) is None
+
+
+# --------------------------------------------------------- session dedupe
+
+def test_speaks_again_when_upstream_advances_mid_session(behind_repo, monkeypatch):
+    """Session dedupe must not outlive the fact it was suppressing.
+
+    Up to 0.1.1 the session stamp was keyed by (session, repo, sign) with no
+    state, so the first sign of a session muted that repo for the rest of it --
+    including a later, larger, genuinely different drift.
+    """
+    origin = subprocess.run(
+        ["git", "-C", str(behind_repo), "remote", "get-url", "origin"],
+        stdout=subprocess.PIPE, check=True,
+    ).stdout.decode().strip()
+
+    first = hook.run(payload(behind_repo / "a.txt", session="live"))
+    assert "3 commit(s) behind" in first["hookSpecificOutput"]["additionalContext"]
+
+    assert hook.run(payload(behind_repo / "a.txt", session="live")) is None, (
+        "an unchanged situation must still be said only once"
+    )
+
+    commit(type(behind_repo)(origin), "e.txt")
+    git(behind_repo, "fetch", "-q")
+
+    second = hook.run(payload(behind_repo / "a.txt", session="live"))
+    assert second is not None, "a larger drift is new information, not a repeat"
+    assert "4 commit(s) behind" in second["hookSpecificOutput"]["additionalContext"]
+
+
+def test_the_background_refresh_can_correct_itself_in_one_session(behind_repo, monkeypatch):
+    """The refresh exists so the *next* touch is accurate. Prove it lands.
+
+    First touch: the fetch is old, so the count is reported with its date and a
+    refresh is started. Then the refresh completes. The second touch must be
+    able to deliver the corrected, current reading -- which the old dedupe key
+    made impossible in a single session.
+    """
+    monkeypatch.setattr(gitfacts, "fetch_age_seconds", lambda g: 4 * 86400.0)
+    monkeypatch.setattr(gitfacts, "spawn_background_fetch", lambda r: True)
+
+    first = hook.run(payload(behind_repo / "a.txt", session="heal"))
+    body = first["hookSpecificOutput"]["additionalContext"]
+    assert "as of its last fetch, 4 days ago" in body
+
+    origin = subprocess.run(
+        ["git", "-C", str(behind_repo), "remote", "get-url", "origin"],
+        stdout=subprocess.PIPE, check=True,
+    ).stdout.decode().strip()
+    commit(type(behind_repo)(origin), "e.txt")
+    git(behind_repo, "fetch", "-q")
+    monkeypatch.setattr(gitfacts, "fetch_age_seconds", lambda g: 1.0)
+
+    second = hook.run(payload(behind_repo / "a.txt", session="heal"))
+    assert second is not None, "the correction the refresh was started for must reach the agent"
+    body = second["hookSpecificOutput"]["additionalContext"]
+    assert "4 commit(s) behind" in body
+    assert "unmeasured" not in body, "a fresh fetch reports a current count, undated"
+
+
+# ------------------------------------------------------------------ deadline
+
+def test_evaluate_stops_starting_signs_past_the_deadline(behind_repo):
+    """The bound is real work stopped, not output withheld."""
+    ran = []
+
+    def slow(ctx):
+        ran.append("slow")
+        time.sleep(0.05)
+        return None
+
+    def after(ctx):
+        ran.append("after")
+        return None
+
+    original = list(signs._REGISTRY)
+    try:
+        signs._REGISTRY[:] = [slow, after]
+        ctx = ctx_for(behind_repo / "a.txt", deadline=time.time() + 0.01)
+        signs.evaluate(ctx)
+    finally:
+        signs._REGISTRY[:] = original
+
+    assert ran == ["slow"], "a sign must not be started once the deadline has passed"
+
+
+def test_a_partial_measurement_is_still_reported(behind_repo):
+    """Whatever was measured before time ran out is true, so it is kept.
+
+    0.1.1 did the opposite: it ran every sign and then discarded the lot if the
+    clock had run out, which paid the full cost and delivered nothing.
+    """
+    spoke = signs.Sign(id="x", text="X - true fact", state_token="t", repo=str(behind_repo))
+
+    def first(ctx):
+        time.sleep(0.05)
+        return spoke
+
+    original = list(signs._REGISTRY)
+    try:
+        signs._REGISTRY[:] = [first, lambda ctx: pytest.fail("second sign must not start")]
+        out = signs.evaluate(ctx_for(behind_repo / "a.txt", deadline=time.time() + 0.01))
+    finally:
+        signs._REGISTRY[:] = original
+
+    assert out == [spoke], "the fact measured before the deadline must survive it"
+
+
+def test_an_already_expired_deadline_starts_nothing(behind_repo):
+    original = list(signs._REGISTRY)
+    try:
+        signs._REGISTRY[:] = [lambda ctx: pytest.fail("must not run")]
+        out = signs.evaluate(ctx_for(behind_repo / "a.txt", deadline=time.time() - 1))
+    finally:
+        signs._REGISTRY[:] = original
+    assert out == []
+
+
+def test_hook_hands_a_deadline_to_the_signs(behind_repo, monkeypatch):
+    seen = {}
+
+    def capture(ctx):
+        seen["deadline"] = ctx.deadline
+        return None
+
+    original = list(signs._REGISTRY)
+    try:
+        signs._REGISTRY[:] = [capture]
+        started = time.time()
+        hook.run(payload(behind_repo / "a.txt"), now=started)
+    finally:
+        signs._REGISTRY[:] = original
+
+    assert seen["deadline"] == pytest.approx(started + hook.DEADLINE_S)
+
+
+def test_worktree_scan_honours_the_deadline(repo, tmp_path):
+    """The one sign whose cost scales with the repo must check the clock."""
+    wt = tmp_path / "wt"
+    git(repo, "worktree", "add", "-q", "-b", "side", str(wt))
+    (wt / "seed.txt").write_text("changed by the other agent")
+    gitfacts.clear_caches()
+
+    ctx = signs.Context(
+        session_id="dl", tool_name="Edit", target_path=str(repo / "seed.txt"),
+        deadline=time.time() - 1,
+    )
+    assert more_signs.concurrent_worktree_edit(ctx) is None, (
+        "an expired deadline must stop the per-worktree scan before it starts"
+    )
+
+
+def test_no_deadline_means_no_limit(behind_repo):
+    """Direct callers and tests get the unbounded behaviour by default."""
+    assert ctx_for(behind_repo / "a.txt").out_of_time() is False
 
 
 def test_no_fetch_storm(behind_repo, monkeypatch):
@@ -238,17 +414,86 @@ def test_no_fetch_storm(behind_repo, monkeypatch):
     assert len(calls) == 1, "cooldown must bound refreshes to one per window"
 
 
-def test_never_fetches_on_the_hot_path(behind_repo, monkeypatch):
-    """The measuring call must not contact the network."""
-    real = subprocess.run
+# Every git subcommand that can open a connection. The measuring path may use
+# none of them; the background refresh may use exactly `fetch`, and only via the
+# detached Popen.
+NETWORK_VERBS = frozenset(
+    {"fetch", "pull", "push", "clone", "ls-remote", "remote-https", "submodule"}
+)
 
-    def guard(cmd, *a, **k):
-        if isinstance(cmd, (list, tuple)) and "fetch" in cmd:
-            raise AssertionError("hot path attempted a network fetch: %r" % (cmd,))
-        return real(cmd, *a, **k)
 
-    monkeypatch.setattr(subprocess, "run", guard)
-    signs.stale_checkout(ctx_for(behind_repo / "a.txt"))
+def _network_guard(monkeypatch, seen):
+    """Trip on any network-capable git call made through *either* primitive.
+
+    0.1.1's version of this test patched `subprocess.run` alone and looked only
+    for "fetch". `spawn_background_fetch` uses `subprocess.Popen`, so the guard
+    was structurally incapable of seeing the one call in the codebase that does
+    contact the network -- it asserted over a path that had nothing to find.
+    """
+    real_run, real_popen = subprocess.run, subprocess.Popen
+
+    def note(kind, cmd):
+        if isinstance(cmd, (list, tuple)):
+            for word in cmd:
+                if word in NETWORK_VERBS:
+                    seen.append((kind, word, list(cmd)))
+
+    def run_guard(cmd, *a, **k):
+        note("run", cmd)
+        return real_run(cmd, *a, **k)
+
+    def popen_guard(cmd, *a, **k):
+        note("popen", cmd)
+        return real_popen(cmd, *a, **k)
+
+    monkeypatch.setattr(subprocess, "run", run_guard)
+    monkeypatch.setattr(subprocess, "Popen", popen_guard)
+    return seen
+
+
+def test_never_fetches_on_the_measuring_path(behind_repo, monkeypatch):
+    """No sign's measurement may contact the network -- not just stale_checkout.
+
+    Exercises the whole registry through `hook.run`, with the background refresh
+    disabled, which is the exact claim the README makes.
+    """
+    seen = _network_guard(monkeypatch, [])
+    monkeypatch.setattr(gitfacts, "fetch_age_seconds", lambda g: 99999.0)
+    monkeypatch.setenv("AGENT_SIGNAGE_NO_FETCH", "1")
+
+    out = hook.run(payload(behind_repo / "a.txt"))
+    assert out is not None, "the repo really is behind; this must be the speaking path"
+    assert seen == [], "measuring path made a network-capable git call: %r" % (seen,)
+
+
+def test_the_only_network_call_is_the_detached_refresh(behind_repo, monkeypatch):
+    """Scope the network claim precisely rather than overstating it.
+
+    agent-signage does make one network call, and this pins what it is allowed
+    to be: `git fetch`, spawned through Popen so it is never awaited, at most
+    once per cooldown window, and only when the refresh is permitted.
+    """
+    seen = _network_guard(monkeypatch, [])
+    monkeypatch.setattr(gitfacts, "fetch_age_seconds", lambda g: 99999.0)
+
+    for _ in range(5):
+        hook.run(payload(behind_repo / "a.txt", session="net"))
+
+    assert [kind for kind, _v, _c in seen] == ["popen"], (
+        "the refresh must be detached, and nothing else may reach the network: %r" % (seen,)
+    )
+    assert seen[0][1] == "fetch"
+    assert "--quiet" in seen[0][2] and "--no-tags" in seen[0][2]
+
+
+def test_no_network_at_all_when_the_refresh_is_disabled(behind_repo, monkeypatch):
+    seen = _network_guard(monkeypatch, [])
+    monkeypatch.setattr(gitfacts, "fetch_age_seconds", lambda g: 99999.0)
+    monkeypatch.setenv("AGENT_SIGNAGE_NO_FETCH", "1")
+
+    for _ in range(5):
+        hook.run(payload(behind_repo / "a.txt", session="nonet"))
+    assert seen == []
 
 
 # ------------------------------------------------------------- hook contract

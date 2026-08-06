@@ -6,6 +6,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches 1.0. Before 1.0, minor version bumps may include breaking changes.
 
+## [0.1.2] - 2026-08-06
+
+The flagship sign could not fire in the case it was built for. This release fixes
+that, corrects two guarantees the README overstated, and adds a way to tell
+whether the tool is working at all.
+
+### Fixed
+- **`stale_checkout` was silent on first contact with any repository whose last
+  fetch was old** — which, in a session that touches a repo once, is every
+  encounter. `DEFAULT_FETCH_TTL_S` was being used as a reporting gate as well as
+  a refresh threshold: past it, the sign returned before `commits_behind` was
+  ever consulted. The measurement was never missing. Git's remote-tracking ref
+  holds it on disk, written by the last fetch or by `git clone`. It is now
+  reported with its date — "12 commit(s) behind origin/main as of its last
+  fetch, 4 days ago; the gap now is unmeasured" — which keeps all three
+  properties: still a measurement, still silent when there is nothing, still no
+  network on the measuring path. Surveying 83 local repositories (49 with an
+  upstream, 16 measurably behind) on a machine whose scheduled sweep fetches
+  every 6 hours, the old gate could report only inside a 30-minute window after
+  each sweep; outside it, 0 of 16. It now reports 16 of 16, always.
+- **Session dedupe suppressed genuinely new information.** It keyed on
+  `(session, repo, sign)` without the state token, so upstream advancing
+  mid-session was muted for the rest of that session. That also defeated the
+  background refresh: the first touch of a stale repo starts a fetch precisely
+  so the next touch can correct the count, and the correction was being
+  suppressed. Both suppressions are now state-bound, as `state.py` always
+  documented acknowledgement to be.
+- **The deadline bounded nothing.** `DEADLINE_S` was checked only after every
+  sign had already run, so it discarded output rather than stopping work. It is
+  now passed into `evaluate()`, checked before each sign starts and inside
+  `concurrent_worktree_edit`'s per-worktree scan, and whatever was measured
+  before time ran out is still reported.
+
+### Added
+- **`agent-signage doctor`** — for one repository: whether the hook is wired
+  into a settings file at all, what git says about the repo right now, and for
+  each of the six signs whether it speaks here or the measured reason it is
+  quiet. A tool that is silent by design cannot be distinguished from a broken
+  install without this. Exits non-zero only when no hook entry naming this
+  package is found. It has no side effects: no session stamps, no fetch.
+- **`commits_ahead`**, reported when non-zero. A tree that is purely behind
+  fast-forwards; a tree that is behind *and* ahead has diverged and needs a
+  rebase or merge decision. Of the 16 repositories measured behind above, 13
+  were also ahead.
+- **`AGENT_SIGNAGE_NO_FETCH`** disables the background refresh without making
+  the tool quieter — the reading already on disk is still reported, still dated.
+
+### Changed
+- The no-network test now guards `subprocess.Popen` as well as `subprocess.run`,
+  across every sign rather than one, and trips on any network-capable git
+  subcommand rather than the single word "fetch". The previous version could not
+  observe `spawn_background_fetch`, which is the only call in the codebase that
+  reaches the network.
+- The published latency table was measured on a small repository. Re-measured:
+  reads are flat regardless of worktree count, but a write in a 22-worktree
+  checkout costs ~330 ms, because `concurrent_worktree_edit` runs one
+  `git status` per sibling worktree. The table now states the scaling instead of
+  a single number. The loop is not capped — an arbitrary cap would cut coverage
+  for exactly the people running many parallel agents — but it now stops at the
+  deadline and says "at least N" when it does.
+
 ## [0.1.1] - 2026-08-05
 
 ### Fixed

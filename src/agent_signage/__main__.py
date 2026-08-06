@@ -1,13 +1,15 @@
 """CLI. `python -m agent_signage` reads a hook payload on stdin.
 
 Subcommands exist for the operations a human or agent needs outside the hot
-path: acknowledging a sign, clearing state, and proving the install works.
+path: acknowledging a sign, clearing state, proving the install works, and
+asking why it is quiet in a particular repository.
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import time
 from typing import List, Optional
 
 from . import __version__, hook, more_signs, signs, state  # noqa: F401
@@ -28,6 +30,41 @@ def _cmd_signs(args) -> int:
     for name in signs.registered():
         print(name)
     return 0
+
+
+def _dedupe_is_state_bound() -> bool:
+    """A stamp for one observed state must not suppress a different one.
+
+    Written against a scratch state directory so `selftest` cannot disturb a
+    live session's stamps, and restored afterwards.
+    """
+    import shutil
+    import tempfile
+
+    previous = os.environ.get("AGENT_SIGNAGE_STATE_DIR")
+    scratch = tempfile.mkdtemp(prefix="agent-signage-selftest-")
+    os.environ["AGENT_SIGNAGE_STATE_DIR"] = scratch
+    try:
+        state.mark_signed("s", "/repo", "stale_checkout", "origin/main@aaaa:3")
+        return (
+            state.already_signed("s", "/repo", "stale_checkout", "origin/main@aaaa:3")
+            and not state.already_signed("s", "/repo", "stale_checkout", "origin/main@bbbb:9")
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("AGENT_SIGNAGE_STATE_DIR", None)
+        else:
+            os.environ["AGENT_SIGNAGE_STATE_DIR"] = previous
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _doctor_imports() -> bool:
+    try:
+        from . import doctor
+
+        return callable(doctor.report)
+    except Exception:
+        return False
 
 
 def _cmd_selftest(args) -> int:
@@ -61,6 +98,28 @@ def _cmd_selftest(args) -> int:
         hook.build_output(["t"])["hookSpecificOutput"]["hookEventName"] == "PreToolUse",
     )
 
+    # The properties 0.1.2 corrected. Each of these was advertised before it was
+    # true, so each is now asserted somewhere a consumer actually runs.
+    check(
+        "deadline reaches the signs",
+        signs.Context(session_id="s", tool_name="", target_path="/x",
+                      deadline=time.time() - 1).out_of_time(),
+    )
+    check(
+        "no deadline means no limit",
+        not signs.Context(session_id="s", tool_name="", target_path="/x").out_of_time(),
+    )
+    check(
+        "evaluation stops at the deadline",
+        signs.evaluate(signs.Context(session_id="s", tool_name="", target_path="/x",
+                                     deadline=time.time() - 1)) == [],
+    )
+    check(
+        "session dedupe is bound to state",
+        _dedupe_is_state_bound(),
+    )
+    check("doctor is importable", _doctor_imports())
+
     width = max(len(n) for n, _ in checks)
     for name, ok in checks:
         print("%s %s" % ("PASS" if ok else "FAIL", name.ljust(width)))
@@ -68,6 +127,23 @@ def _cmd_selftest(args) -> int:
     print("-" * (width + 5))
     print("%d/%d passed" % (len(checks) - len(failed), len(checks)))
     return 1 if failed else 0
+
+
+def _cmd_doctor(args) -> int:
+    """Explain this repository: what is wired, what speaks, what it costs.
+
+    Exit status is about the *install*, not about the repository: a repo with
+    nothing wrong is the expected case and is not a failure. Only a missing hook
+    entry -- the state where silence is misleading rather than informative --
+    exits non-zero.
+    """
+    from . import doctor
+
+    os.environ.setdefault("AGENT_SIGNAGE_NO_FETCH", "1")
+    runs = doctor.TIMING_RUNS if args.runs is None else max(1, args.runs)
+    lines, wired = doctor.report(args.path, runs=runs)
+    print("\n".join(lines))
+    return 0 if wired else 1
 
 
 _MATCHER = "Read|Edit|Write|NotebookEdit|Grep|Glob"
@@ -166,6 +242,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     t = sub.add_parser("selftest", help="assert the runtime guarantees")
     t.set_defaults(func=_cmd_selftest)
+
+    d = sub.add_parser("doctor", help="why is it quiet in this repo, and what does it cost")
+    d.add_argument("path", nargs="?", default=".")
+    # Resolved in _cmd_doctor so the default lives in one place and importing
+    # `doctor` stays off the argument-parsing path.
+    d.add_argument("--runs", type=int, default=None)
+    d.set_defaults(func=_cmd_doctor)
 
     i = sub.add_parser("install", help="add the hook to a Claude Code settings file")
     i.add_argument("--settings", default="~/.claude/settings.json")

@@ -58,7 +58,7 @@ def _emit(ctx: Context, sign_id: str, repo: str, token: str, text: str) -> Optio
     """Apply the shared ack + once-per-session policy, then hand back the sign."""
     if state.is_acknowledged(repo, sign_id, token):
         return None
-    if state.already_signed(ctx.session_id, repo + "|" + ctx.target_path, sign_id):
+    if state.already_signed(ctx.session_id, repo + "|" + ctx.target_path, sign_id, token):
         return None
     return Sign(id=sign_id, text=text, state_token=token, repo=repo + "|" + ctx.target_path)
 
@@ -191,8 +191,16 @@ def concurrent_worktree_edit(ctx: Context) -> Optional[Sign]:
     if rel.startswith(".."):
         return None
 
+    # One `git status` per sibling worktree, and this is the only sign whose
+    # cost scales with the repository rather than with the file. Measured on a
+    # 17-worktree checkout it took an Edit to ~300ms end-to-end, which is why it
+    # is the sign that checks the clock as it goes.
     dirty: List[str] = []
+    truncated = False
     for wt in others:
+        if ctx.out_of_time():
+            truncated = True
+            break
         sibling = os.path.join(wt, rel)
         if not os.path.exists(sibling):
             continue
@@ -202,12 +210,18 @@ def concurrent_worktree_edit(ctx: Context) -> Optional[Sign]:
     if not dirty:
         return None
 
+    # A truncated scan found every worktree it looked at, and no others. Saying
+    # "2 worktrees" would present a floor as a total; "at least 2" is what was
+    # actually established. The listed paths are exact either way.
     token = "worktree:%s:%s" % (rel, "|".join(sorted(dirty)))
     text = (
-        "CONCURRENT EDIT - {n} other worktree(s) of this repository have uncommitted changes "
-        "to {rel}: {where}. If another agent is working there, one of these edits will be "
-        "silently lost. Inspect: git -C {first} status --porcelain -- {rel}"
-    ).format(n=len(dirty), rel=rel, where=", ".join(dirty), first=dirty[0])
+        "CONCURRENT EDIT - {atleast}{n} other worktree(s) of this repository have uncommitted "
+        "changes to {rel}: {where}. If another agent is working there, one of these edits will "
+        "be silently lost. Inspect: git -C {first} status --porcelain -- {rel}"
+    ).format(
+        atleast="at least " if truncated else "",
+        n=len(dirty), rel=rel, where=", ".join(dirty), first=dirty[0],
+    )
     return _emit(ctx, "concurrent_worktree_edit", root, token, text)
 
 

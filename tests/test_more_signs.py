@@ -10,46 +10,13 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 
 import pytest
+from conftest import git
 
 from agent_signage import gitfacts, hook, more_signs, signs, state  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("isolated_state")
-
-
-def git(repo, *args):
-    return subprocess.run(
-        ["git", "-C", str(repo)] + list(args),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
-    )
-
-
-@pytest.fixture
-def isolated_state(tmp_path, monkeypatch):
-    d = tmp_path / "state"
-    d.mkdir()
-    monkeypatch.setenv("AGENT_SIGNAGE_STATE_DIR", str(d))
-    # Tests that call signs directly bypass hook.run(), which is what normally
-    # resets the per-evaluation memoisation.
-    gitfacts.clear_caches()
-    more_signs.clear_caches()
-    monkeypatch.delenv("AGENT_SIGNAGE_IGNORE", raising=False)
-    return d
-
-
-@pytest.fixture
-def repo(tmp_path):
-    r = tmp_path / "repo"
-    r.mkdir()
-    git(r, "init", "-q", "-b", "main")
-    git(r, "config", "user.email", "t@t.t")
-    git(r, "config", "user.name", "t")
-    (r / "seed.txt").write_text("seed")
-    git(r, "add", "seed.txt")
-    git(r, "commit", "-m", "seed")
-    return r
 
 
 def ctx(path, tool="Edit", session="s1"):
@@ -304,8 +271,6 @@ def test_caches_do_not_leak_state_between_evaluations(repo, tmp_path):
 def test_every_memoised_function_is_registered_for_clearing():
     """A new lru_cache added without registering it would silently go stale."""
     import functools as _f
-
-    from agent_signage import gitfacts
 
     memoised = {
         name for name, obj in vars(gitfacts).items()

@@ -1,9 +1,8 @@
 # Design
 
-This document draws directly from the module docstrings in `src/agent_signage/`
-and from the commit that shipped 0.0.8. It explains the choices, not the
-mechanics — the mechanics are the code and the 68 tests in `tests/`, which are
-the specification.
+This document draws directly from the module docstrings in `src/agent_signage/`.
+It explains the choices, not the mechanics — the mechanics are the code and the
+103 tests in `tests/`, which are the specification.
 
 ## Origin
 
@@ -74,11 +73,14 @@ it fails the soundness property by construction, not by degree.
 `gitfacts.py`: "A `None` means 'not known', never 'known to be fine' — callers
 must not treat absence of a fact as evidence of its opposite." This governs
 every early return in `stale_checkout()`: no upstream, detached HEAD, an
-in-progress bisect/rebase/merge/cherry-pick, a vendored path, remote knowledge
-too stale to trust, an already-acknowledged state, an already-signed session —
-every one of these ends the function with `None`, and every one of them means
-the same thing: *this invocation has no fact to report*, not *this repo is
-current*.
+in-progress bisect/rebase/merge/cherry-pick, a vendored path, an
+already-acknowledged state, a fact already reported this session — every one of
+these ends the function with `None`, and every one of them means the same
+thing: *this invocation has no fact to report*, not *this repo is current*.
+
+Since 0.1.2, "remote knowledge is too stale to trust" is no longer on that list.
+It was, and it was the wrong kind of silence: the fact existed and was being
+thrown away rather than absent. See below.
 
 The distinction matters because `commits_behind()` can only report what the
 last fetch already knew (see below); it can undercount when that fetch is
@@ -99,20 +101,106 @@ tool had no fresh fact to report.
 
 The alternative — fetching on the hot path — was rejected outright, not
 tuned around: `gitfacts.spawn_background_fetch()`'s docstring calls putting
-the network on the hot path of every file read "unacceptable." Instead, when
-remote knowledge exceeds `DEFAULT_FETCH_TTL_S` (30 minutes),
-`stale_checkout()` spawns a detached `git fetch` and returns `None` for that
-turn — the mechanism is self-healing (the next touch has fresh data) and
-costs the caller nothing on the path that matters. A cooldown
+the network on the hot path of every file read "unacceptable." When remote
+knowledge exceeds `DEFAULT_FETCH_TTL_S` (30 minutes), `stale_checkout()`
+spawns a detached `git fetch` so the next touch has fresh data. A cooldown
 (`state.FETCH_COOLDOWN_S`, 120 seconds) prevents a slow fetch from spawning
-one fetch per tool call while it's in flight — `test_no_fetch_storm` asserts
-exactly one fetch is spawned across ten calls in a stale window, and
-`test_never_fetches_on_the_hot_path` asserts the measuring call itself never
-invokes `fetch`.
+one fetch per tool call while it's in flight.
 
-This is why the README states the guarantee as "No network on the hot path,"
-not "always current": the tradeoff is coverage for a hard bound on what a
-file-read hook is allowed to cost.
+## What 0.1.2 changed, and why it did not cost soundness
+
+Up to 0.1.1 that same threshold also *gated reporting*: past it, the sign
+returned `None` before `commits_behind()` was ever called. The reasoning was
+that a stale reading is not worth stating. It was wrong for a reason worth
+recording, because the mistake is easy to repeat.
+
+The measurement was never missing. Git's remote-tracking ref is on disk,
+written by the last `git fetch` or by `git clone`, and `rev-list --count
+HEAD..@{u}` reads it without a network call. 0.1.1 was computing nothing and
+discarding a fact it already had.
+
+The cost of that was total in the common case. A session that touches a repo
+once gets exactly one encounter, and on a machine where a scheduled sweep
+fetches every 6 hours, a 30-minute reporting window covers 8% of wall-clock
+time. Measured across 83 local repositories — 49 with an upstream, 16
+measurably behind — the old gate reported 0 of 16 outside that window. The
+flagship sign was effectively off.
+
+0.1.2 reports the reading and dates it:
+
+> `12 commit(s) behind origin/main as of its last fetch, 4 days ago; the gap
+> now is unmeasured`
+
+Each of the three properties survives intact, and it is worth being explicit
+about why, because "report a stale number" sounds like exactly the kind of
+trade this project refuses:
+
+**Sound.** The count is what git computed from a ref it wrote at a knowable
+moment. The sentence states both. What it does *not* do is extrapolate: the
+phrase is "the gap now is unmeasured", not "at least 12 behind". "At least"
+would be an inference and a wrong one — upstream can be rewound, which makes
+the true gap smaller. Naming the date is a measurement; projecting it forward
+is not.
+
+**Silent.** `commits_behind` returning 0 still produces nothing, however old
+the fetch. Reporting an old reading is not the same as asserting drift the ref
+does not show.
+
+**Actionable.** When the reading is dated, the resolving command starts with
+`git fetch`, because the first useful action is no longer "look at the log",
+it is "find out where you actually stand".
+
+The alternatives were costed and rejected: tuning the TTL only moves the
+window; fetching synchronously inside the deadline puts the network on the
+measuring path, which is the one thing the design will not do; and persisting
+a last-known-state cache adds a store whose staleness has to be reasoned about
+separately, to report a fact git is already storing.
+
+`test_never_fetches_on_the_measuring_path` asserts the measuring path stays
+network-free across every sign, and
+`test_the_only_network_call_is_the_detached_refresh` pins the single call that
+is allowed to reach the network to a detached, never-awaited `git fetch`.
+
+## Why suppression is bound to state, not to the repository
+
+`state.py` documented acknowledgement as state-bound from the start: an ack
+keyed to `(repo, sign, state_token)` can only ever suppress the exact fact
+that was true when it was given. Session dedupe did not follow the same rule —
+it keyed on `(session, repo, sign)` — and the gap had two consequences.
+
+Upstream advancing mid-session was muted for the rest of that session: the
+tool had said "3 behind" and would not say "40 behind" an hour later, because
+it had already spoken about that repo.
+
+Worse, it defeated the background refresh in the single-session case the
+refresh exists for. The sequence is: first touch finds an old fetch, reports a
+dated count, starts a fetch; the fetch lands; the next touch can now report a
+current count. Suppressing that second report meant the refresh was doing work
+whose entire product was discarded.
+
+Both suppressions are now keyed to the state token. Re-firing is bounded by
+construction — the token changes only when the measured situation changes — so
+the ceiling is one line per distinct fact, which is the same ceiling the ack
+mechanism has always had.
+
+## Why the deadline had to be handed down rather than checked at the end
+
+`hook.DEADLINE_S` was consulted once, after `signs.evaluate()` had returned. By
+then all six signs had run, so the check could not shorten anything; the only
+thing it could still do was discard a true fact that had already cost the time
+to produce. The README nonetheless advertised it as a bound on every
+invocation, and no test referenced it at all.
+
+It is now passed into the `Context` and checked before each sign starts, and
+inside `concurrent_worktree_edit`'s per-worktree scan — the one loop whose cost
+grows with the repository rather than the file. Partial results are kept, on
+the same logic as everywhere else: what was measured before the clock ran out
+is still true, and a truncated worktree scan says "at least N" because the
+paths it did list are exact while the total is now a floor.
+
+The honest statement of the bound is what the README now carries: the deadline
+plus at most one in-flight `git` call, which `gitfacts.GIT_TIMEOUT_S` caps at
+two seconds.
 
 ## Why acknowledgement is keyed to state, not to the repo
 
