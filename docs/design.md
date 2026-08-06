@@ -161,6 +161,47 @@ network-free across every sign, and
 `test_the_only_network_call_is_the_detached_refresh` pins the single call that
 is allowed to reach the network to a detached, never-awaited `git fetch`.
 
+## What this converges on, and who got there first
+
+The freshness gate in 0.1.1 was a rediscovery of a solved problem, and it is worth
+saying so rather than letting a reader find out.
+
+A warning system whose silence is meaningful cannot also use silence to mean
+"my data was too old to check." Once anything other than all-clear can suppress
+the alarm, silence stops being a signal. Monitoring has known this for decades
+and answers it with a third state: Nagios distinguishes UNKNOWN from OK, aircraft
+instruments carry off-flags so a dead gauge does not read as a steady one, and
+deadman switches exist precisely so that "no alert" is distinguishable from "the
+alerter is gone." 0.1.1 had two states where it needed three, and chose the wrong
+one to collapse into.
+
+The arithmetic generalises even if the lesson does not: the availability of any
+freshness-gated report is the gate window divided by the refresh cadence. If you
+do not control the cadence, you do not control your coverage — which makes a
+one-line UI guard into an unacknowledged dependency on someone else's cron job.
+
+## Why a stale count is a floor, not a guess
+
+There is a second reason the old gate was worse than merely miscalibrated, and it
+is specific to this signal.
+
+Staleness here has a direction. The upstream ref only moves forward, and pulling
+is itself a fetch — so an old reading cannot overstate the gap. A four-day-old
+"11 behind" means *at least* 11. The number is a floor.
+
+That inverts the gate's intent. An old fetch record means the user has not pulled
+in days, which is exactly when they are furthest behind. The rule therefore
+withheld the warning in proportion to how much it was likely to matter: the worse
+the situation, the quieter the tool. The 0 of 16 measurement above is that
+inversion showing up as a number.
+
+The sign still does not say "at least 11" — see the soundness argument in the
+previous section. Reporting the count with its date lets the reader draw the
+floor themselves, which is a measurement; asserting it would be an inference.
+One caveat keeps this from being airtight: a force-pushed or rebased upstream can
+move backwards, so the floor property holds for ordinary deploy branches and not
+by construction.
+
 ## Why suppression is bound to state, not to the repository
 
 `state.py` documented acknowledgement as state-bound from the start: an ack
