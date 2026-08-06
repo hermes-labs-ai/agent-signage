@@ -241,7 +241,7 @@ pytest                        # full behavioural suite over real synthetic git r
 
 ## Status and limitations
 
-`0.1.0` — early, and honest about it. Six signs, 68 tests over real synthetic git repositories,
+`0.1.1` — early, and honest about it. Six signs, 68 tests over real synthetic git repositories,
 in production use at Hermes Labs. The sign registry is stable and extensible.
 
 Two limits worth knowing before you adopt:
