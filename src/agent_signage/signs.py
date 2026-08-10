@@ -162,12 +162,16 @@ def stale_checkout(ctx: Context) -> Optional[Sign]:
     if VENDORED_RE.search(ctx.target_path):
         return None
 
+    if ctx.out_of_time():
+        return None
     root = gitfacts.repo_root(ctx.target_path)
     if root is None:
         return None
     if os.path.abspath(root) in _ignored_repos():
         return None
 
+    if ctx.out_of_time():
+        return None
     gitdir = gitfacts.git_dir(root)
     if gitdir is None:
         return None
@@ -176,9 +180,13 @@ def stale_checkout(ctx: Context) -> Optional[Sign]:
     # on purpose and telling them so is noise.
     if gitfacts.in_progress(gitdir).any:
         return None
+    if ctx.out_of_time():
+        return None
     if gitfacts.current_branch(root) is None:
         return None  # detached HEAD: the old commit is the point
 
+    if ctx.out_of_time():
+        return None
     upstream = gitfacts.upstream_ref(root)
     if not upstream:
         return None
@@ -191,32 +199,44 @@ def stale_checkout(ctx: Context) -> Optional[Sign]:
         if fetch_age < session_age:
             return None
 
-    # Remote knowledge is old. Refresh out of band so the next touch is current
-    # -- but do not throw away the reading that is already on disk. Whatever
+    # Remote knowledge is old. We will refresh out of band after completing the
+    # local measurement, so our own fetch cannot race the count and ref identity.
+    # Do not throw away the reading that is already on disk. Whatever
     # `git clone` or the last `git fetch` wrote into the remote-tracking ref is
     # a measurement git took at a knowable moment, and a repo that was 27 behind
     # four days ago is worth saying so long as the sentence carries its date.
     is_stale = fetch_age is None or fetch_age > ctx.fetch_ttl_s
-    if is_stale and _background_fetch_allowed(ctx) and not state.fetch_attempted_recently(root):
-        state.mark_fetch_attempt(root)
-        gitfacts.spawn_background_fetch(root)
 
-    behind = gitfacts.commits_behind(root, upstream)
+    if ctx.out_of_time():
+        return None
+    upstream_tip = gitfacts.upstream_sha(root, upstream)
+    if not upstream_tip:
+        return None
+
+    if ctx.out_of_time():
+        return None
+    behind = gitfacts.commits_behind(root, upstream_tip)
     if not behind:
         return None
 
-    sha = gitfacts.upstream_sha(root, upstream) or "unknown"
     # Deliberately not keyed on `ahead`: an ack means "I know this repo is N
     # behind that upstream tip", and a local commit is not new information about
     # that. Keying on it would expire every ack the moment its holder committed.
-    token = "%s@%s:%d" % (upstream, sha[:12], behind)
+    token = "%s@%s:%d" % (upstream, upstream_tip[:12], behind)
 
     if state.is_acknowledged(root, "stale_checkout", token):
         return None
     if state.already_signed(ctx.session_id, root, "stale_checkout", token):
         return None
 
-    ahead = gitfacts.commits_ahead(root, upstream) or 0
+    if ctx.out_of_time():
+        return None
+    ahead = gitfacts.commits_ahead(root, upstream_tip) or 0
+    upstream_tip_age: Optional[str] = None
+    if not is_stale:
+        if ctx.out_of_time():
+            return None
+        upstream_tip_age = gitfacts.upstream_commit_age(root, upstream_tip)
     text = (
         "STALE CHECKOUT - {name} is {n} commit(s) behind {up}{div}{when}. "
         "This working copy may not be what is deployed; confirm which source is "
@@ -226,7 +246,7 @@ def stale_checkout(ctx: Context) -> Optional[Sign]:
         n=behind,
         up=upstream,
         div=" and %d ahead" % ahead if ahead else "",
-        when=_when(root, upstream, fetch_age, is_stale),
+        when=_when(upstream, upstream_tip, fetch_age, is_stale, upstream_tip_age),
         cmd=(
             "git -C {r} fetch && git -C {r} log --oneline HEAD..@{{u}}"
             if is_stale
@@ -234,10 +254,29 @@ def stale_checkout(ctx: Context) -> Optional[Sign]:
         ).format(r=root),
     )
 
+    # Start the refresh only after every Git-backed fact in the message has
+    # been captured. The wording below binds stale readings to that measurement
+    # moment, so a fast detached fetch cannot retroactively make the sentence
+    # false before the hook returns it.
+    if (
+        is_stale
+        and not ctx.out_of_time()
+        and _background_fetch_allowed(ctx)
+        and not state.fetch_attempted_recently(root)
+    ):
+        state.mark_fetch_attempt(root)
+        gitfacts.spawn_background_fetch(root)
+
     return Sign(id="stale_checkout", text=text, state_token=token, repo=root)
 
 
-def _when(root: str, upstream: str, fetch_age: Optional[float], is_stale: bool) -> str:
+def _when(
+    upstream: str,
+    sha: str,
+    fetch_age: Optional[float],
+    is_stale: bool,
+    upstream_tip_age: Optional[str],
+) -> str:
     """Date the reading, so the number is never presented as current truth.
 
     Two honest sentences, not one. A fetch inside the refresh threshold makes
@@ -250,9 +289,14 @@ def _when(root: str, upstream: str, fetch_age: Optional[float], is_stale: bool) 
     inference; naming the date is a measurement.
     """
     if not is_stale:
-        age = gitfacts.upstream_commit_age(root, upstream)
-        return " (upstream tip %s)" % age if age else ""
+        return " (upstream tip %s)" % upstream_tip_age if upstream_tip_age else ""
     if fetch_age is None:
         # No FETCH_HEAD: the remote-tracking ref is whatever `git clone` wrote.
-        return " as of the clone; this repo has never fetched, so the gap now is unmeasured"
-    return " as of its last fetch, %s ago; the gap now is unmeasured" % human_age(fetch_age)
+        return (
+            " from cached {up} at {sha}; this repo had never fetched when checked, "
+            "so the current gap is unmeasured"
+        ).format(up=upstream, sha=sha[:12])
+    return (
+        " from cached {up} at {sha} (FETCH_HEAD was {age} old when checked); "
+        "the current gap is unmeasured"
+    ).format(up=upstream, sha=sha[:12], age=human_age(fetch_age))

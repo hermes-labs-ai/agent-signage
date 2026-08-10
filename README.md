@@ -54,10 +54,11 @@ Every number in that line comes from a ref already on disk, so when the last fet
 sign says so rather than going quiet:
 
 ```
-STALE CHECKOUT - langquant is 8 commit(s) behind origin/main and 6 ahead as of its last fetch,
-4 days ago; the gap now is unmeasured. This working copy may not be what is deployed; confirm
+STALE CHECKOUT - example-app is 8 commit(s) behind origin/main and 6 ahead from cached
+origin/main at a1b2c3d4e5f6 (FETCH_HEAD was 4 days old when checked); the current gap is
+unmeasured. This working copy may not be what is deployed; confirm
 which source is authoritative.
-Inspect: git -C /Users/you/dev/langquant fetch && git -C /Users/you/dev/langquant log --oneline HEAD..@{u}
+Inspect: git -C /path/to/example-app fetch && git -C /path/to/example-app log --oneline HEAD..@{u}
 ```
 
 That text reaches the model alongside the tool result, at the moment it touches the file.
@@ -305,7 +306,7 @@ pytest                        # full behavioural suite over real synthetic git r
 
 ## Status and limitations
 
-`0.1.2` — early, and honest about it. Six signs, 103 tests over real synthetic git repositories,
+`0.1.2` — early, and honest about it. Six signs, 105 tests over real synthetic git repositories,
 in production use at Hermes Labs. The sign registry is stable and extensible.
 
 Limits worth knowing before you adopt:

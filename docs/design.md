@@ -128,8 +128,8 @@ flagship sign was effectively off.
 
 0.1.2 reports the reading and dates it:
 
-> `12 commit(s) behind origin/main as of its last fetch, 4 days ago; the gap
-> now is unmeasured`
+> `12 commit(s) behind origin/main from cached origin/main at a1b2c3d4e5f6
+> (FETCH_HEAD was 4 days old when checked); the current gap is unmeasured`
 
 Each of the three properties survives intact, and it is worth being explicit
 about why, because "report a stale number" sounds like exactly the kind of

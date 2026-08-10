@@ -30,8 +30,9 @@ repositories, it was a property of when you happened to look.
 0.1.2 reports the reading and dates it:
 
 ```
-STALE CHECKOUT - clone is 11 commit(s) behind origin/main and 1 ahead as of its last fetch,
-4 days ago; the gap now is unmeasured. This working copy may not be what is deployed; confirm
+STALE CHECKOUT - clone is 11 commit(s) behind origin/main and 1 ahead from cached origin/main
+at a1b2c3d4e5f6 (FETCH_HEAD was 4 days old when checked); the current gap is unmeasured.
+This working copy may not be what is deployed; confirm
 which source is authoritative.
 Inspect: git -C <repo> fetch && git -C <repo> log --oneline HEAD..@{u}
 ```
@@ -124,7 +125,7 @@ for. It stops at the deadline instead.
 
 ## Verification
 
-103 tests over real synthetic git repositories (74 in 0.1.1), `selftest` 15/15, ruff clean.
+105 tests over real synthetic git repositories (74 in 0.1.1), `selftest` 15/15, ruff clean.
 The wheel and sdist were listed file-by-file; the sdist allow-list still leaks nothing. Installed
 into a clean virtualenv: `agent-signage==0.1.2` and `pip`, nothing else. Both behaviour fixes
 were verified end-to-end against 0.1.1 installed from PyPI, not against the source tree.

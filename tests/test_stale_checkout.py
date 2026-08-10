@@ -45,8 +45,17 @@ def test_silent_when_current(behind_repo):
     assert signs.stale_checkout(ctx_for(behind_repo / "a.txt")) is None
 
 
-def test_reported_count_matches_git(behind_repo):
+def test_reported_count_matches_git(behind_repo, monkeypatch):
     """Soundness: the number in the sign is the number git reports."""
+    immutable_tip = gitfacts.upstream_sha(str(behind_repo), "origin/main")
+    real_tip_age = gitfacts.upstream_commit_age
+    age_targets = []
+
+    def record_tip_age(root, target):
+        age_targets.append(target)
+        return real_tip_age(root, target)
+
+    monkeypatch.setattr(gitfacts, "upstream_commit_age", record_tip_age)
     real = int(
         subprocess.run(
             ["git", "-C", str(behind_repo), "rev-list", "--count", "HEAD..origin/main"],
@@ -56,6 +65,7 @@ def test_reported_count_matches_git(behind_repo):
     )
     s = signs.stale_checkout(ctx_for(behind_repo / "a.txt"))
     assert "%d commit(s) behind" % real in s.text
+    assert age_targets == [immutable_tip]
 
 
 # ------------------------------------------------- deliberate states suppress
@@ -178,8 +188,8 @@ def test_stale_fetch_state_still_reports_and_refreshes(behind_repo, monkeypatch)
     s = signs.stale_checkout(ctx_for(behind_repo / "a.txt"))
     assert s is not None, "an old fetch must not discard a measurement already on disk"
     assert "3 commit(s) behind origin/main" in s.text
-    assert "as of its last fetch, 4 days ago" in s.text, "the reading must carry its date"
-    assert "the gap now is unmeasured" in s.text, "must not imply the count is current"
+    assert "FETCH_HEAD was 4 days old when checked" in s.text, "the reading must carry its date"
+    assert "the current gap is unmeasured" in s.text, "must not imply the count is current"
     assert "fetch &&" in s.text, "the resolving command must start by fetching"
     assert len(calls) == 1, "and the background refresh still happens"
 
@@ -203,6 +213,42 @@ def test_stale_reading_is_dated_not_inflated(behind_repo, monkeypatch):
     s = signs.stale_checkout(ctx_for(behind_repo / "a.txt"))
     assert "%d commit(s) behind" % real in s.text
     assert "at least" not in s.text.lower()
+
+
+def test_stale_reading_pins_one_immutable_upstream_tip(behind_repo, monkeypatch):
+    """A ref move cannot splice a count from one tip to the SHA of another."""
+    old_tip = gitfacts.upstream_sha(str(behind_repo), "origin/main")
+    origin = subprocess.run(
+        ["git", "-C", str(behind_repo), "remote", "get-url", "origin"],
+        stdout=subprocess.PIPE,
+        check=True,
+    ).stdout.decode().strip()
+    real_behind = gitfacts.commits_behind
+    real_ahead = gitfacts.commits_ahead
+    measured_targets = []
+
+    def move_ref_after_count(root, target):
+        measured_targets.append(("behind", target))
+        count = real_behind(root, target)
+        commit(type(behind_repo)(origin), "moved-after-count.txt")
+        git(behind_repo, "fetch", "-q")
+        return count
+
+    def record_ahead(root, target):
+        measured_targets.append(("ahead", target))
+        return real_ahead(root, target)
+
+    monkeypatch.setattr(gitfacts, "commits_behind", move_ref_after_count)
+    monkeypatch.setattr(gitfacts, "commits_ahead", record_ahead)
+    monkeypatch.setattr(gitfacts, "fetch_age_seconds", lambda _gitdir: 4 * 86400.0)
+    monkeypatch.setenv("AGENT_SIGNAGE_NO_FETCH", "1")
+
+    s = signs.stale_checkout(ctx_for(behind_repo / "a.txt"))
+
+    assert s is not None
+    assert "3 commit(s) behind origin/main" in s.text
+    assert "at %s" % old_tip[:12] in s.text
+    assert measured_targets == [("behind", old_tip), ("ahead", old_tip)]
 
 
 def test_never_fetched_repo_says_so(behind_repo, monkeypatch):
@@ -290,7 +336,7 @@ def test_the_background_refresh_can_correct_itself_in_one_session(behind_repo, m
 
     first = hook.run(payload(behind_repo / "a.txt", session="heal"))
     body = first["hookSpecificOutput"]["additionalContext"]
-    assert "as of its last fetch, 4 days ago" in body
+    assert "FETCH_HEAD was 4 days old when checked" in body
 
     origin = subprocess.run(
         ["git", "-C", str(behind_repo), "remote", "get-url", "origin"],
@@ -363,6 +409,28 @@ def test_an_already_expired_deadline_starts_nothing(behind_repo):
     finally:
         signs._REGISTRY[:] = original
     assert out == []
+
+
+def test_stale_checkout_stops_between_git_calls_when_deadline_expires(
+    behind_repo, monkeypatch
+):
+    """A completed Git call may cross the deadline; no second call may start."""
+    real_repo_root = gitfacts.repo_root
+
+    def slow_repo_root(path):
+        root = real_repo_root(path)
+        time.sleep(0.03)
+        return root
+
+    monkeypatch.setattr(gitfacts, "repo_root", slow_repo_root)
+    monkeypatch.setattr(
+        gitfacts,
+        "git_dir",
+        lambda _root: pytest.fail("must not start another Git call past the deadline"),
+    )
+
+    ctx = ctx_for(behind_repo / "a.txt", deadline=time.time() + 0.01)
+    assert signs.stale_checkout(ctx) is None
 
 
 def test_hook_hands_a_deadline_to_the_signs(behind_repo, monkeypatch):

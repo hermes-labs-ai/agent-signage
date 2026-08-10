@@ -1,13 +1,13 @@
 {
   "version": "0.1.2",
-  "recorded": "2026-08-06",
+  "recorded": "2026-08-10",
   "machine": "macOS arm64 (Darwin 24.6.0), CPython 3.14.6, git 2.x",
   "reproduce": "python3 -m pytest -q && agent-signage selftest && agent-signage doctor",
   "note": "Latency was measured while the machine was under real load (several concurrent agent sessions). Treat the absolute numbers as an upper-ish bound for this hardware and the relative shape -- reads flat, writes scaling with worktree count -- as the durable finding.",
 
   "tests": {
-    "count": 103,
-    "by_file": {"test_stale_checkout.py": 56, "test_more_signs.py": 28, "test_doctor.py": 19},
+    "count": 105,
+    "by_file": {"test_stale_checkout.py": 58, "test_more_signs.py": 28, "test_doctor.py": 19},
     "selftest_checks": 15,
     "previous": {"0.1.0": 40, "0.1.1": 74}
   },
@@ -17,24 +17,24 @@
     "why_it_mattered": "A session that touches a repo once gets exactly one encounter, and that encounter was the silent one.",
 
     "local_repo_survey": {
-      "method": "walked ~/Documents/projects, ~/dev, ~/github-projects, ~/ai-infra, ~/Documents/projects/_archive; for each repo read upstream ref, rev-list --count both directions, and FETCH_HEAD mtime. No fetching.",
+      "method": "read-only survey of local Git checkouts; for each repo read upstream ref, rev-list --count in both directions, and FETCH_HEAD mtime. No fetching.",
       "repos_scanned": 83,
       "with_an_upstream": 49,
       "measurably_behind": 16,
       "of_those_also_ahead": 13,
       "never_fetched": 0,
-      "largest_gap": "forgetted, 22 behind origin/main",
+      "largest_gap": "22 commits behind the configured upstream",
       "diverged_examples": [
-        "langquant 8 behind / 6 ahead",
-        "jailbreak-bench 13 behind / 5 ahead",
-        "zer0lint 14 behind / 4 ahead",
-        "hermes-prime 1 behind / 10 ahead"
+        "8 behind / 6 ahead",
+        "13 behind / 5 ahead",
+        "14 behind / 4 ahead",
+        "1 behind / 10 ahead"
       ]
     },
 
     "firing_rate": {
       "important": "The 0.1.1 rate is not a property of the repositories. It is a property of when you happen to look, because the gate was a fetch-age window.",
-      "confound_found": "This machine runs a launchd job (ai.hermeslabs.maintenance, run interval 21600s = 6h) that bulk-fetches. The survey landed 16 minutes after a sweep, which is why a naive spot measurement flattered 0.1.1.",
+      "confound_found": "A periodic background fetch process made coverage depend on where the survey landed in its cycle, which is why a naive spot measurement flattered 0.1.1.",
       "0_1_1_inside_the_30min_window": "14 / 16",
       "0_1_1_outside_the_window": "0 / 16",
       "window_share_of_wall_clock": "30 min in every 360 min = 8.3%",
@@ -46,7 +46,7 @@
     "ab_against_published_0_1_1": {
       "setup": "synthetic clone: 11 behind origin/main, 1 ahead, FETCH_HEAD stamped 4 days old, origin URL pointed at a nonexistent path so no background fetch can land and change the state mid-test",
       "0.1.1_from_pypi": "SILENT on touch 1, 2 and 3",
-      "0.1.2": "speaks once: 'STALE CHECKOUT - clone is 11 commit(s) behind origin/main and 1 ahead as of its last fetch, 4 days ago; the gap now is unmeasured ... Inspect: git -C <repo> fetch && git -C <repo> log --oneline HEAD..@{u}', then correctly silent on touches 2 and 3"
+      "0.1.2": "speaks once with the cached upstream SHA and observed FETCH_HEAD age, calls the current gap unmeasured, then correctly stays silent on touches 2 and 3"
     },
 
     "ab_session_dedupe": {
@@ -88,6 +88,7 @@
     "the per-worktree scan honours the deadline (test_worktree_scan_honours_the_deadline)",
     "an old fetch does not discard a measurement already on disk (test_stale_fetch_state_still_reports_and_refreshes)",
     "an old reading is dated, never inflated to 'at least N' (test_stale_reading_is_dated_not_inflated)",
+    "each stale reading pins one immutable upstream SHA for count, divergence, age, token, and display (test_stale_reading_pins_one_immutable_upstream_tip)",
     "upstream advancing mid-session is not suppressed (test_speaks_again_when_upstream_advances_mid_session)",
     "the background refresh can correct itself within one session (test_the_background_refresh_can_correct_itself_in_one_session)",
     "background refresh bounded to one per cooldown (test_no_fetch_storm)",
