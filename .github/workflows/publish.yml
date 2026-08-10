@@ -1,14 +1,7 @@
 name: Publish to PyPI
 
-# Token-based, matching the rest of the Hermes Labs stack.
-#
-# The alternative -- PyPI trusted publishing via OIDC -- is more secure but
-# cannot be configured from a CLI: it is a web-only account setting with no
-# API, and twine has no account-management surface. Using the existing
-# user-scoped API token keeps releases scriptable and consistent with how
-# lintlang and the other packages in this org already ship.
-#
-# Requires one repository secret: PYPI_API_TOKEN.
+# PyPI trusted publishing: GitHub exchanges the job's OIDC identity for a
+# short-lived, project-scoped upload token. No long-lived PyPI secret is used.
 
 on:
   release:
@@ -17,6 +10,12 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/agent-signage
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
       - uses: actions/checkout@v4
@@ -39,5 +38,3 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}

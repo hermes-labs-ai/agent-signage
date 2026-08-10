@@ -1,0 +1,125 @@
+{
+  "version": "0.1.2",
+  "recorded": "2026-08-10",
+  "machine": "macOS arm64 (Darwin 24.6.0), CPython 3.14.6, git 2.x",
+  "reproduce": "python3 -m pytest -q && agent-signage selftest && agent-signage doctor",
+  "note": "Latency was measured while the machine was under real load (several concurrent agent sessions). Treat the absolute numbers as an upper-ish bound for this hardware and the relative shape -- reads flat, writes scaling with worktree count -- as the durable finding.",
+
+  "tests": {
+    "count": 105,
+    "by_file": {"test_stale_checkout.py": 58, "test_more_signs.py": 28, "test_doctor.py": 19},
+    "selftest_checks": 15,
+    "previous": {"0.1.0": 40, "0.1.1": 74}
+  },
+
+  "headline_defect_fixed": {
+    "what": "stale_checkout returned None before commits_behind() was ever called whenever the last fetch was older than DEFAULT_FETCH_TTL_S (30 min). The measurement was on disk the whole time, in the remote-tracking ref.",
+    "why_it_mattered": "A session that touches a repo once gets exactly one encounter, and that encounter was the silent one.",
+
+    "local_repo_survey": {
+      "method": "read-only survey of local Git checkouts; for each repo read upstream ref, rev-list --count in both directions, and FETCH_HEAD mtime. No fetching.",
+      "repos_scanned": 83,
+      "with_an_upstream": 49,
+      "measurably_behind": 16,
+      "of_those_also_ahead": 13,
+      "never_fetched": 0,
+      "largest_gap": "22 commits behind the configured upstream",
+      "diverged_examples": [
+        "8 behind / 6 ahead",
+        "13 behind / 5 ahead",
+        "14 behind / 4 ahead",
+        "1 behind / 10 ahead"
+      ]
+    },
+
+    "firing_rate": {
+      "important": "The 0.1.1 rate is not a property of the repositories. It is a property of when you happen to look, because the gate was a fetch-age window.",
+      "confound_found": "A periodic background fetch process made coverage depend on where the survey landed in its cycle, which is why a naive spot measurement flattered 0.1.1.",
+      "0_1_1_inside_the_30min_window": "14 / 16",
+      "0_1_1_outside_the_window": "0 / 16",
+      "window_share_of_wall_clock": "30 min in every 360 min = 8.3%",
+      "0_1_1_expected_coverage": "~7.3% of touches on a behind repo",
+      "0_1_2_coverage": "16 / 16, at any time, with the reading dated",
+      "prior_run_spot_measurement": "2 of 17 (12.5%) -- consistent with this model, measured at a different phase of the same 6h cycle"
+    },
+
+    "ab_against_published_0_1_1": {
+      "setup": "synthetic clone: 11 behind origin/main, 1 ahead, FETCH_HEAD stamped 4 days old, origin URL pointed at a nonexistent path so no background fetch can land and change the state mid-test",
+      "0.1.1_from_pypi": "SILENT on touch 1, 2 and 3",
+      "0.1.2": "speaks once with the cached upstream SHA and observed FETCH_HEAD age, calls the current gap unmeasured, then correctly stays silent on touches 2 and 3"
+    },
+
+    "ab_session_dedupe": {
+      "setup": "one session id; touch, advance upstream by one commit, fetch, touch again",
+      "0.1.1": "touch 1 speaks ('11 behind'), touch 2 SILENT -- the stamp was keyed (session, repo, sign) with no state",
+      "0.1.2": "touch 1 speaks ('12 behind and 1 ahead'), touch 2 speaks ('13 behind and 1 ahead')"
+    }
+  },
+
+  "latency_ms_per_invocation": {
+    "measurement": "end-to-end subprocess with a fresh interpreter and a unique session id per run, p50 of 30 runs -- exactly what a harness pays per tool call",
+    "why_unique_session_ids": "reusing one session id means runs 2..N measure the already-signed short path, not the case anyone cares about",
+    "interpreter_floor_python_c_pass": 16.9,
+    "silent_non_repo_path": 35.2,
+    "silent_vendored_path": 34.4,
+    "silent_read_in_repo_no_worktrees": 75.3,
+    "silent_edit_in_repo_no_worktrees": 83.9,
+    "silent_read_in_repo_22_worktrees": 76.8,
+    "silent_edit_in_repo_22_worktrees": 331.9,
+    "speaking_read_in_repo_16_worktrees": 115.7,
+    "speaking_edit_in_repo_16_worktrees": 306.8,
+    "p95_worst_case_measured": 356.0,
+    "worktree_scaling": "writes cost roughly 84ms + ~11ms per sibling worktree; reads are flat because concurrent_worktree_edit only fires on write-shaped tools",
+    "correction": "the 0.1.0 and 0.1.1 tables published ~62ms read / ~71ms edit with no scaling note. Those were measured on a small repository and understate a write in a many-worktree checkout by ~4x. An independent audit measured 356-427ms on a 21-worktree repo; this run reproduces that at 332ms p50 / 356ms p95.",
+    "bounding_decision": "the per-worktree loop is NOT capped at a fixed number. A cap would silently cut coverage for the people running the most parallel agents, who are exactly who the sign is for. It stops at the deadline instead and reports 'at least N' when truncated."
+  },
+
+  "message": {"chars": 315, "approx_tokens": 79, "lines": 1},
+
+  "guarantees_asserted_by_tests": [
+    "never emits a block decision (test_output_envelope_shape)",
+    "always exits 0 (test_main_always_exits_zero)",
+    "silent on malformed/empty/absent input (9 parametrised cases)",
+    "no network on the measuring path, across every sign, guarding subprocess.run AND subprocess.Popen (test_never_fetches_on_the_measuring_path)",
+    "the only network call is a detached, never-awaited git fetch (test_the_only_network_call_is_the_detached_refresh)",
+    "AGENT_SIGNAGE_NO_FETCH removes network entirely without silencing the reading (test_no_network_at_all_when_the_refresh_is_disabled)",
+    "the deadline stops work rather than discarding output (test_evaluate_stops_starting_signs_past_the_deadline)",
+    "a partial measurement taken before the deadline is still reported (test_a_partial_measurement_is_still_reported)",
+    "the per-worktree scan honours the deadline (test_worktree_scan_honours_the_deadline)",
+    "an old fetch does not discard a measurement already on disk (test_stale_fetch_state_still_reports_and_refreshes)",
+    "an old reading is dated, never inflated to 'at least N' (test_stale_reading_is_dated_not_inflated)",
+    "each stale reading pins one immutable upstream SHA for count, divergence, age, token, and display (test_stale_reading_pins_one_immutable_upstream_tip)",
+    "upstream advancing mid-session is not suppressed (test_speaks_again_when_upstream_advances_mid_session)",
+    "the background refresh can correct itself within one session (test_the_background_refresh_can_correct_itself_in_one_session)",
+    "background refresh bounded to one per cooldown (test_no_fetch_storm)",
+    "ack cannot mute new information (test_ack_expires_when_upstream_moves)",
+    "doctor never fetches and writes no session stamps (test_doctor_never_fetches, test_doctor_writes_no_session_stamps)",
+    "every registered sign has a doctor explanation for its silence (test_every_sign_has_a_doctor_reason)",
+    "a raising sign cannot kill the others (test_sign_that_raises_is_dropped_not_fatal)"
+  ],
+
+  "packaging_verified": {
+    "wheel_contents": ["__init__.py", "__main__.py", "doctor.py", "gitfacts.py", "hook.py", "more_signs.py", "signs.py", "state.py", "py.typed"],
+    "sdist_leaks": "none (checked for internal notes, RELEASING, RELEASE-*, GO-LIVE, HANDOFF)",
+    "clean_venv_install": "agent-signage==0.1.2 and pip only -- zero runtime dependencies confirmed",
+    "selftest_from_installed_wheel": "15/15"
+  },
+
+  "known_limits": [
+    "Every count is as of the last fetch. When that is old the sign says so and calls the present gap unmeasured. It can undercount drift; it cannot invent it.",
+    "Bash-invoked file edits (cat, sed -i, shell scripts) carry no tool path and are not seen.",
+    "Git only. A stale deployed API, database, or service is out of scope.",
+    "Writes get slower as worktree count grows (~11ms each). Reads do not.",
+    "False-positive evidence remains thin: 0/12 and 0/8 on small corpora whose controls were arguably incapable of firing. Unchanged in 0.1.2 and still the most valuable thing to improve.",
+    "Guarantees are self-attested. Two published in 0.1.0/0.1.1 did not hold as stated and were corrected here after an audit of the shipped artifact."
+  ],
+
+  "signs": [
+    "stale_checkout",
+    "symlink_escape",
+    "conflict_markers",
+    "concurrent_worktree_edit",
+    "binary_edit",
+    "generated_file"
+  ]
+}

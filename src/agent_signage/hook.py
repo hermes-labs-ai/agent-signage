@@ -107,16 +107,20 @@ def run(raw: str, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
         tool_name=str(payload.get("tool_name") or ""),
         target_path=target,
         session_started=_session_started(),
+        # The deadline is handed to the signs rather than applied to their
+        # result. Checking it here, after everything had already run, bounded
+        # nothing: the work was done and the only thing the check could still do
+        # was throw away a true fact that had cost the time anyway. Passing it in
+        # lets evaluation stop early and still report what it measured.
+        deadline=started + DEADLINE_S,
     )
 
     found = signs.evaluate(ctx)
     if not found:
         return None
-    if time.time() - started > DEADLINE_S:
-        return None
 
     for s in found:
-        state.mark_signed(ctx.session_id, s.repo, s.id)
+        state.mark_signed(ctx.session_id, s.repo, s.id, s.state_token)
 
     return build_output([s.text for s in found])
 

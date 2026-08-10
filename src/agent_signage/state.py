@@ -2,17 +2,28 @@
 
 Two separate suppressions, deliberately not merged:
 
-  Session dedupe -- one sign per (session, repo, sign) so a sign cannot repeat
-  itself while the agent works. Keyed by session, so a *new* session about the
-  same repo is told again. An earlier prototype keyed this by repo alone, which
-  silently muted the warning for every later session until the temp dir was
-  cleared; that is the failure this split exists to prevent.
+  Session dedupe -- one sign per (session, repo, sign, state) so a sign cannot
+  repeat itself while the agent works. Keyed by session, so a *new* session
+  about the same repo is told again. An earlier prototype keyed this by repo
+  alone, which silently muted the warning for every later session until the temp
+  dir was cleared; that is the failure this split exists to prevent.
 
   Acknowledgement -- keyed by the observed *state*, not by the repo. Once a
   human or agent acknowledges "27 behind origin/main", that exact situation
   stays quiet. If upstream then moves, the key no longer matches and the sign
   speaks again. An ack can therefore never suppress genuinely new information,
   which is what makes "stop telling me" safe to offer at all.
+
+Both are now bound to the state token, which up to 0.1.1 only acknowledgement
+was. Session dedupe keyed on (session, repo, sign) alone, so an upstream that
+advanced mid-session was suppressed for the rest of it -- the tool had said "12
+behind" and would not say "40 behind" an hour later, because it had already
+spoken about that repo. That also silently defeated the background refresh: the
+first touch of a stale repo reports a dated count and starts a fetch, and the
+whole point of the fetch is that the *next* touch can correct it. Suppressing
+the correction made the refresh pointless in exactly the single-session case it
+was built for. Re-firing is bounded by construction: the token only changes when
+the measured situation changes, so the ceiling is one line per distinct fact.
 """
 
 from __future__ import annotations
@@ -55,13 +66,13 @@ def _path(prefix: str, key: str) -> str:
 
 # --------------------------------------------------------------- session dedupe
 
-def already_signed(session_id: str, repo: str, sign: str) -> bool:
-    return os.path.exists(_path(_SESSION_PREFIX, _key(session_id, repo, sign)))
+def already_signed(session_id: str, repo: str, sign: str, state_token: str) -> bool:
+    return os.path.exists(_path(_SESSION_PREFIX, _key(session_id, repo, sign, state_token)))
 
 
-def mark_signed(session_id: str, repo: str, sign: str) -> None:
+def mark_signed(session_id: str, repo: str, sign: str, state_token: str) -> None:
     try:
-        open(_path(_SESSION_PREFIX, _key(session_id, repo, sign)), "w").close()
+        open(_path(_SESSION_PREFIX, _key(session_id, repo, sign, state_token)), "w").close()
     except OSError:
         # Losing a stamp costs a duplicate sign, which is noise. Failing the
         # hook costs the sign entirely. Noise is the better failure.
