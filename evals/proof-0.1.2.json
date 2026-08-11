@@ -12,7 +12,7 @@
   },
   "checks": {
     "tests": {
-      "command": "pytest -q",
+      "command": "python3 -m pytest -q",
       "collected": 105,
       "by_file": {
         "tests/test_doctor.py": 19,
