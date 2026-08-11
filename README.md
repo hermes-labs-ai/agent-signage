@@ -304,6 +304,9 @@ agent-signage doctor          # what is live, what is inert, and what it costs h
 pytest                        # full behavioural suite over real synthetic git repos
 ```
 
+The exact-commit deterministic readback for `0.1.2`, including a safe isolated
+hook demonstration, is in [`evals/proof-0.1.2.json`](evals/proof-0.1.2.json).
+
 ## Status and limitations
 
 `0.1.2` — early, and honest about it. Six signs, 105 tests over real synthetic git repositories,
