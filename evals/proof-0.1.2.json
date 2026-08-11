@@ -1,0 +1,61 @@
+{
+  "schema": "agent-signage/deterministic-proof-v1",
+  "recorded_utc": "2026-08-11T09:29:00Z",
+  "version": "0.1.2",
+  "subject_commit": "deda340385b5d9cd9dc36b1aab544cd2be3e81ac",
+  "subject_tag": "v0.1.2",
+  "environment": {
+    "os": "macOS 15.7.3 (24G419)",
+    "architecture": "arm64",
+    "python": "3.14.6",
+    "git": "2.39.5 (Apple Git-154)"
+  },
+  "checks": {
+    "tests": {
+      "command": "pytest -q",
+      "collected": 105,
+      "by_file": {
+        "tests/test_doctor.py": 19,
+        "tests/test_more_signs.py": 28,
+        "tests/test_stale_checkout.py": 58
+      },
+      "exit_code": 0
+    },
+    "selftest": {
+      "command": "agent-signage selftest",
+      "passed": 15,
+      "total": 15,
+      "exit_code": 0
+    },
+    "ruff": {
+      "command": "ruff check .",
+      "result": "All checks passed!",
+      "exit_code": 0
+    }
+  },
+  "safe_hook_demo": {
+    "setup": "throwaway local origin and clone; clone fetched after two empty upstream commits",
+    "network_refresh": "disabled with AGENT_SIGNAGE_NO_FETCH=1",
+    "payload": {
+      "session_id": "batch02-safe-demo-correct",
+      "tool_name": "Read",
+      "tool_input": {
+        "file_path": "<throwaway-clone>/a.txt"
+      }
+    },
+    "observed": {
+      "exit_code": 0,
+      "output_keys": [
+        "hookSpecificOutput"
+      ],
+      "hook_event_name": "PreToolUse",
+      "measured_gap": "2 commit(s) behind origin/main",
+      "blocking_decision_present": false
+    }
+  },
+  "limits": [
+    "This is self-attested deterministic proof, not an independent adversarial evaluation.",
+    "The safe hook demonstration exercises one stale-checkout signal; it does not cover every sign or harness integration.",
+    "ruff format --check . was not a passing baseline: Ruff 0.16.2 reported 11 pre-existing files that it would reformat. No formatting cleanup was made."
+  ]
+}
