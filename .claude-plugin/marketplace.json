@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "hermes-labs",
+  "version": "1.0.0",
+  "description": "Hermes Labs plugins for reliable coding-agent work",
+  "owner": {
+    "name": "Hermes Labs",
+    "email": "roli@hermes-labs.ai"
+  },
+  "plugins": [
+    {
+      "name": "agent-signage",
+      "description": "A PreToolUse hook that reports actionable git-state facts before file operations.",
+      "version": "0.1.2",
+      "source": "./claude-plugin",
+      "category": "development",
+      "homepage": "https://github.com/hermes-labs-ai/agent-signage"
+    }
+  ]
+}
