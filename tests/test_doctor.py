@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import json
 import os
+from argparse import Namespace
 
 import pytest
 from conftest import commit, git
 
-from agent_signage import doctor, gitfacts, more_signs, signs  # noqa: F401
+from agent_signage import __main__ as cli
+from agent_signage import doctor, gitfacts, more_signs, signs, state  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("isolated_state")
 
@@ -66,6 +68,55 @@ def test_install_probe_ignores_unrelated_hooks(tmp_path, monkeypatch, behind_rep
     assert ok is False, "someone else's hook is not this hook"
 
 
+def test_install_probe_ignores_malformed_hook_shapes(tmp_path, monkeypatch):
+    p = tmp_path / "settings.json"
+    monkeypatch.setattr(doctor, "SETTINGS_PATHS", (str(p),))
+    for payload in (
+        {"hooks": []},
+        {"hooks": {"PreToolUse": {}}},
+        {"hooks": {"PreToolUse": [{"hooks": [None, "not an object"]}]}},
+    ):
+        p.write_text(json.dumps(payload))
+        assert doctor._installs() == []
+
+
+def test_install_probe_ignores_non_string_commands(tmp_path, monkeypatch):
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({
+        "hooks": {
+            "PreToolUse": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": ["python3", "-m", "agent_signage"],
+                }],
+            }],
+        },
+    }))
+    monkeypatch.setattr(doctor, "SETTINGS_PATHS", (str(settings),))
+
+    assert doctor._installs() == []
+
+
+def test_install_accepts_a_relative_filename(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert cli._cmd_install(Namespace(
+        settings="settings.json", command="python3 -m agent_signage", timeout=8
+    )) == 0
+    assert (tmp_path / "settings.json").is_file()
+
+
+def test_ack_normalizes_to_git_toplevel(tmp_path, behind_repo, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    s = signs.stale_checkout(signs.Context(
+        session_id="ack-cli", tool_name="Read", target_path=str(behind_repo / "a.txt"),
+        allow_background_fetch=False))
+    assert s is not None
+    assert cli._cmd_ack(Namespace(
+        repo=behind_repo.name, sign=s.id, token=s.state_token
+    )) == 0
+    assert state.is_acknowledged(str(behind_repo), s.id, s.state_token)
+
+
 def test_unreadable_settings_does_not_raise(tmp_path, monkeypatch, behind_repo):
     bad = tmp_path / "settings.json"
     bad.write_text("{ not json")
@@ -99,6 +150,7 @@ def test_speaking_sign_is_shown_with_its_text(behind_repo, wired):
     body = "\n".join(lines)
     assert "stale_checkout           SPEAKS" in body
     assert "3 commit(s) behind origin/main" in body
+    assert "ack token" in body
 
 
 def test_quiet_sign_gets_a_measured_reason(behind_repo, wired):

@@ -2,14 +2,14 @@
 """Claude Code plugin entry point for agent-signage's PreToolUse hook.
 
 Delegates to `agent_signage.hook.main()`, which reads the hook payload on
-stdin and does the actual work (see ../../src/agent_signage/hook.py). This
+stdin and does the actual work (see ../src/agent_signage/hook.py). This
 wrapper exists only to locate the package:
 
-  * If agent-signage is already installed (e.g. `pip install agent-signage`),
-    the normal import succeeds and nothing further happens here.
-  * If this plugin is enabled from a checkout of the agent-signage repository
-    itself, the adjacent `src/` two directories up is added to `sys.path`, so
-    the plugin works without a separate install step.
+  * The plugin ships its small, dependency-free runtime under `../src/`, so a
+    marketplace install works without a separate pip install or repository
+    checkout.
+  * If the bundled runtime is absent, an already-installed package is still
+    accepted as a compatibility fallback.
 
 Consistent with the rest of agent-signage, this never blocks: if the package
 can't be found either way, it exits 0 and says nothing, exactly like every
@@ -23,10 +23,10 @@ import sys
 from pathlib import Path
 
 
-def _prepend_adjacent_src() -> None:
-    """Use the repo's own src/ when this plugin runs from a clone of it."""
+def _prepend_plugin_src() -> None:
+    """Use the runtime bundled in this plugin before any global install."""
     try:
-        source = Path(__file__).resolve().parents[2] / "src"
+        source = Path(__file__).resolve().parents[1] / "src"
     except IndexError:
         return
     if source.is_dir():
@@ -34,15 +34,13 @@ def _prepend_adjacent_src() -> None:
 
 
 def main() -> int:
+    _prepend_plugin_src()
     try:
         import agent_signage  # noqa: F401
     except ImportError:
-        _prepend_adjacent_src()
+        return 0  # no bundled or installed package - fail open, say nothing
 
-    try:
-        from agent_signage import hook
-    except ImportError:
-        return 0  # not installed and no adjacent checkout - fail open, say nothing
+    from agent_signage import hook
 
     return hook.main()
 

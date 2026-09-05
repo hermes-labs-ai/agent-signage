@@ -84,6 +84,15 @@ pip install git+https://github.com/hermes-labs-ai/agent-signage.git
 agent-signage install    # writes the hook entry for you
 ```
 
+Or install the self-contained Claude Code plugin from the Hermes Labs
+marketplace. The plugin bundles its dependency-free runtime, so this path does
+not require a separate `pip install`:
+
+```bash
+claude plugin marketplace add hermes-labs-ai/agent-signage
+claude plugin install agent-signage@hermes-labs
+```
+
 Or add it yourself to `~/.claude/settings.json`:
 
 ```json
@@ -265,6 +274,7 @@ writes no stamps and never fetches.
 agent-signage ack /path/to/repo stale_checkout "origin/main@a1b2c3d4e5f6:27"
 ```
 
+`agent-signage doctor path/to/repo` prints the current acknowledgement token.
 The acknowledgement is bound to the **observed state**, not to the repository. If upstream
 moves, the key no longer matches and the sign speaks again — so "stop telling me" can never
 suppress genuinely new information.
