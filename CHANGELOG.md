@@ -6,6 +6,95 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches 1.0. Before 1.0, minor version bumps may include breaking changes.
 
+## [Unreleased]
+
+### Added
+- **Publication boundary for GitHub pull requests.** Two pieces with opposite jobs, and the
+  first part of this tool allowed to fail closed.
+
+  `agent-signage publish pr-create|pr-edit` **owns execution**. It opens the body once on a
+  bounded `O_NOFOLLOW|O_NONBLOCK` descriptor, checks that snapshot, emits the action-time sign,
+  runs `gh`
+  with an argv list and `--body-file -` so the checked bytes go to the child's stdin, then reads
+  the body back with `gh pr view --json body` and requires exact equality. Exit `0` published
+  and verified, `1` artifact rejected with no mutating child (edit preservation may first read
+  the live body), `2` input rejected, `3` a
+  `gh` child failed and its status and stderr are reported (a failed `pr-edit` pre-read exits
+  here with no update attempted), `4` `gh` succeeded but the published
+  body could not be verified. Success is never claimed before the readback, and exits 3 and 4
+  say plainly that the pull request may exist and nothing was reverted.
+
+  `agent-signage gate` is a separate `PreToolUse` adapter for the **Bash** tool that denies
+  scoped `gh pr create`/`gh pr new` and body-mutating `gh pr edit` calls and names the publisher
+  instead. It never executes the command under judgment: the command is lexed as data, so
+  compound, substituted, wrapped and path-qualified attempts are caught by segment. Narrow on
+  purpose — `gh pr view`, `gh pr list --search create`, `gh issue create` and every unrelated
+  command are silent, and malformed payloads produce nothing. It accepts both Claude Code's
+  `tool_input.command` and Codex unified exec's `tool_input.cmd` event shapes.
+
+  `agent-signage install-publication-gate` adds that adapter to the Codex user hooks file. The
+  edit is idempotent and atomic, preserves existing hook groups (including Hermes Gate), and
+  creates a timestamped backup before changing an existing file. Codex requires the new hook to
+  be reviewed and trusted after restart; the installer states that step and its recovery path.
+  `evals/codex-hook-installation.json` records the live configuration readback, direct handler
+  probes, and the honest observation that an already-running task does not gain enforcement
+  retroactively.
+
+  Neither is reachable from `hook.py`, which is unchanged and still fails open, cannot deny, and
+  cannot exit non-zero. `selftest` and `test_the_generic_hook_is_unchanged_and_cannot_deny`
+  assert that separation.
+
+- `agent-signage attribution` prints the block to paste into a body, so the published wording
+  has one source of truth. `agent-signage preflight` checks an artifact without publishing.
+- `evals/publication-boundary.json` — 52 cases, every one driving a real supported surface: the
+  publisher end to end against `tests/fake_gh.py`, or the Bash adapter's full hook payload,
+  scope, and deny-output contract.
+
+### Changed
+- **Wording corrected.** The possessive now follows the linked organization name —
+  `[Hermes Labs](https://hermes-labs.ai)’ autonomous triage` — so the trailing "its" refers to
+  Hermes Labs rather than to the contribution. A review is attributed to the
+  **responsible human reviewer**; a contribution to the **responsible human contributor**.
+- **`--oversight` has no default and must be chosen explicitly**, on every command that takes
+  it. Claiming a human provided active oversight is the strongest statement this tool will
+  publish about a person, and it is never the fallback. The action-time sign says "declared
+  oversight", not "verified".
+- `/evals` is included in the sdist; the boundary suite executes a fixture from it.
+- `selftest` grew eleven boundary checks (15 → 26).
+
+### Removed
+- **The unsigned oversight sidecar.** An earlier draft of this work carried `--attestation`, a
+  local JSON file naming the artifact digest. An independent review was right that nothing
+  signed it and anything able to write the body could write it, so it established that two files
+  agreed rather than that a person had read either. Renaming it to "declaration" would have kept
+  the ceremony while admitting the mechanism proves nothing, so it is deleted. `--kind` and
+  `--oversight` are flags, documented as caller declarations. `--receipt`, `--receipt-out` and
+  `--max-age-hours` went with it.
+- **The whole-body claim scan.** It swept for phrases like "approved by" and "I reviewed" and
+  rejected a maintainer's own true statement while any paraphrase walked through. The property
+  it reached for is enforced where it is checkable: the published wording is generated and
+  compared exactly, and the oversight clause appears only at the declared level.
+- **`--prepare` and `pr-comment`.** Preparing an argv and handing it back is not a boundary —
+  the file can change between the check and the send, and what the caller does with a prepared
+  command is unobservable. `pr-comment` was scope nobody had exercised end to end.
+
+### Fixed
+- **An attribution block hidden inside a fenced code region or an enclosing HTML comment is now
+  rejected.** The first version only asked whether the markers appeared in the text, so a block
+  that rendered as a code sample, or did not render at all, satisfied it. Ordinary comments and
+  code fences elsewhere in the body are unaffected.
+- The Markdown visibility check now also rejects four-space indented code blocks and requires a
+  fenced region to close with the same delimiter character at least as long as its opener.
+- The Bash adapter now follows option-bearing `sudo`, `env`, and `nice` wrappers, shell
+  negation/control-flow prefixes, and the built-in `gh pr new` alias. Shell comments and
+  `--help`/`-h`/`--version` calls remain silent rather than becoming false positives.
+- `pr-edit` now pre-reads the live body and automatically preserves conventional disclosure
+  trailers present in that snapshot; `--preserve` covers project-specific lines. This guarantee
+  is explicitly snapshot-bound because `gh pr edit` has no conditional revision token.
+- Snapshot construction is validated defensively before any child starts, FIFOs are rejected
+  without blocking, and every post-spawn failure states the possible public effect and lack of
+  rollback.
+
 ## [0.1.2] - 2026-08-10
 
 The flagship sign could not fire in the case it was built for. This release fixes

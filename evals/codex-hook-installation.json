@@ -1,0 +1,124 @@
+{
+  "schema": "agent-signage/codex-hook-installation-v1",
+  "observed_at": "2026-09-06T06:50:00-04:00",
+  "configuration": {
+    "surface": "Codex user hooks.json",
+    "pre_tool_use_matcher": "^Bash$",
+    "existing_hermes_gate_groups": 1,
+    "agent_signage_groups": 1,
+    "existing_groups_preserved": true
+  },
+  "installed_handler_probe": {
+    "codex_cmd_raw_pr_create": {
+      "payload": {
+        "tool_name": "Bash",
+        "cwd": "agent-signage checkout with origin https://github.com/hermes-labs-ai/agent-signage.git",
+        "tool_input": {
+          "cmd": "gh pr create --title t"
+        }
+      },
+      "decision": "deny"
+    },
+    "read_only_flag_value_regression": "silent",
+    "missing_attribution_publisher_exit": 1,
+    "missing_attribution_started_gh": false
+  },
+  "current_session_probe": {
+    "command": "gh pr create --help",
+    "cwd": "agent-signage checkout with origin https://github.com/hermes-labs-ai/agent-signage.git",
+    "exit": 0,
+    "reached_gh": true,
+    "public_effect": false,
+    "conclusion": "The already-running task did not reload the newly installed hook."
+  },
+  "installed_package_refresh": {
+    "observed_at": "2026-09-06T17:40:00-04:00",
+    "why": "The interpreter named by hooks.json ran an earlier build of this package that denied every gh pr create/edit regardless of repository. The reviewed adapter is scoped to Hermes work contexts, so the installed package was refreshed to the reviewed source.",
+    "permission_doctor": "MATCH for the mutating session thread before the refresh",
+    "mechanism": "uv tool install --reinstall <this checkout>, repeated in this session after each round of resolved review findings so the installed adapter is the final source (the receipt already named this checkout directory; the interpreter path in hooks.json is unchanged)",
+    "backup": "~/.codex/backups/agent-signage-uv-tool-pre-scoped-20260906-162513.tar.gz",
+    "hooks_json_changed": false,
+    "installed_gate_sha256_before": "468d8e8dc7e549eda8144be144347dbe37232a326d662819cdb32a0923f56be3",
+    "installed_gate_sha256_after": "0841dafc02c1f236659803d85cfa62839038b029c93ecd6385710aac22764c6a",
+    "installed_matches_source": true,
+    "configured_interpreter_probes": [
+      {
+        "cwd": "Hermes checkout",
+        "cmd": "gh pr create --title t",
+        "before": "deny",
+        "after": "deny"
+      },
+      {
+        "cwd": "Hermes checkout",
+        "cmd": "gh pr edit 3 --body x",
+        "before": "deny",
+        "after": "deny"
+      },
+      {
+        "cwd": "Hermes checkout",
+        "cmd": "make test && gh pr create -t t",
+        "before": "deny",
+        "after": "deny"
+      },
+      {
+        "cwd": "/tmp",
+        "cmd": "gh pr create --repo hermes-labs-ai/x --title t",
+        "before": "deny",
+        "after": "deny"
+      },
+      {
+        "cwd": "/tmp",
+        "cmd": "gh pr create --repo roli-personal/x --title t",
+        "before": "deny",
+        "after": "silent"
+      },
+      {
+        "cwd": "/tmp",
+        "cmd": "gh pr create --title t",
+        "before": "deny",
+        "after": "silent"
+      },
+      {
+        "cwd": "/tmp",
+        "cmd": "gh pr edit 3 --repo roli-personal/x --body x",
+        "before": "deny",
+        "after": "silent"
+      },
+      {
+        "cwd": "Hermes checkout",
+        "cmd": "gh pr create --help",
+        "before": "deny",
+        "after": "silent"
+      },
+      {
+        "cwd": "Hermes checkout",
+        "cmd": "gh pr view 3",
+        "before": "silent",
+        "after": "silent"
+      },
+      {
+        "cwd": "/tmp",
+        "cmd": "gh pr create --repo hermes-labs-ai/x --title \"t (unbalanced quote)",
+        "before": "deny",
+        "after": "deny"
+      },
+      {
+        "cwd": "/tmp",
+        "cmd": "gh pr create --repo someone/x --title \"t (unbalanced quote)",
+        "before": "deny",
+        "after": "silent"
+      }
+    ],
+    "installed_selftest": "26/26 passed",
+    "review_findings_resolved_before_final_refresh": [
+      "A failed read-only pr-edit pre-read now exits 3 (child failed, no update attempted) instead of 4.",
+      "The adapter now honours an explicit --repo/-R Hermes target on lines it cannot tokenise, both in run() and in the own-failure fallback, which also judges the payload's command string rather than the raw JSON, where the command follows a quote."
+    ]
+  },
+  "activation_required": [
+    "Start or restart Codex so the hook configuration is loaded.",
+    "Open /hooks and review and trust the new non-managed hook definition.",
+    "Sessions already running before the package refresh keep whatever adapter build they loaded; only new sessions observe the scoped behaviour."
+  ],
+  "claim_boundary": "This receipt proves installation, the direct behaviour of the exact configured interpreter for the recorded payloads, and the package refresh, not enforcement in any already-running task."
+}

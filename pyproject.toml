@@ -65,6 +65,10 @@ include = [
   "/tests",
   "/docs",
   "/examples",
+  "/scripts",
+  # tests/test_preflight.py executes evals/preflight-matrix.json, so the sdist
+  # cannot run its own suite without it.
+  "/evals",
   "/claude-plugin",
   "/.github",
   "/README.md",
