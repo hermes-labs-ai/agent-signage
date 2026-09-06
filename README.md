@@ -21,6 +21,7 @@ and silence the rest of the time.
 - [Configuration](#configuration)
 - [Adding your own sign](#adding-your-own-sign)
 - [Operational cards](#operational-cards)
+- [Publication boundary](#publication-boundary)
 - [Verify it yourself](#verify-it-yourself)
 - [Status and limitations](#status-and-limitations)
 - [Research](#research)
@@ -343,16 +344,232 @@ or allow or block an action. Keep cards in a trusted local configuration path. T
 already identifies the boundary owns its facts, authorization checks, enforcement, and fallback.
 This keeps operational guidance timely without turning agent-signage into a policy engine.
 
+## Publication boundary
+
+Everything above is passive. The hook cannot block, cannot exit non-zero, and goes quiet on
+every error — that contract is what makes it safe in front of every file operation, and it is
+exactly why it cannot carry a publication requirement. **A mechanism that says nothing when it
+breaks is not a gate.**
+
+So the boundary is separate, and it has two halves. One **owns execution**, so what was checked
+and what was sent are the same bytes by construction. The other is a **PreToolUse Bash adapter**
+that stops an agent reaching `gh` around it.
+
+### The publisher
+
+```bash
+python3 scripts/publish.py pr-create \
+  --body-file /abs/path/to/pr-body.md \
+  --target owner/repo --title "feat: ..." \
+  --kind contribution --oversight active
+```
+
+It runs `gh` itself, in a fixed order that a caller cannot reassemble wrongly:
+
+1. **Open the body once**, on a bounded, non-blocking file descriptor — `O_NOFOLLOW` refuses a
+   symlink, `O_NONBLOCK` prevents a FIFO from hanging the preflight, `fstat` checks the opened
+   object, and a capped read rejects oversized input.
+2. **Check that snapshot.** Not the file — the snapshot. There is no second read.
+3. For **`pr-edit`**, read the live body and require every recognized human/upstream disclosure
+   trailer in that snapshot to remain. Project-specific lines can be bound with `--preserve`.
+4. **Emit the action-time sign**, before any mutating child process exists.
+5. **Run `gh` with an argv list**, never a shell string, and always `--body-file -`, handing the
+   snapshot bytes to its stdin. `gh` is never given the path, so it cannot re-read a file that
+   changed after step 2.
+6. **Read the body back** with `gh pr view --json body` and require exact equality.
+
+Success is claimed only after step 6.
+
+| Exit | Meaning |
+|---|---|
+| `0` | Published, and the body read back byte for byte |
+| `1` | Artifact rejected — no mutating `gh` child was started; edit preservation may make one read-only view call |
+| `2` | Input or usage rejected — no `gh` child was started |
+| `3` | A `gh` child failed; its exit status and stderr are reported, not swallowed. On `pr-edit` a failed read-only pre-read exits here too, and no update was attempted |
+| `4` | `gh` succeeded but the published body could not be verified as the checked bytes |
+
+Exits 3 and 4 say plainly what is true: the pull request may exist, nothing was reverted, and
+this is not a successful publication.
+
+Supported operations are exactly **`pr-create`** and **`pr-edit`**. `pr-comment` was in an
+earlier draft and is gone — an operation nobody had exercised end to end was scope, not
+coverage.
+
+### The Bash boundary adapter
+
+The publisher only owns the path that goes through it. `scripts/gate.py` is a separate
+`PreToolUse` hook for the **Bash** tool that denies a scoped `gh pr create`/`gh pr new` or a
+body-mutating `gh pr edit` call, and names the publisher instead:
+
+```bash
+$ echo '{"tool_name":"Bash","tool_input":{"command":"gh pr create --repo hermes-labs-ai/example --title t"}}' \
+    | python3 scripts/gate.py
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny", ...}}
+
+$ echo '{"tool_name":"Bash","tool_input":{"command":"gh pr view 12"}}' | python3 scripts/gate.py
+$                     # empty: not its business
+```
+
+It never executes the command it judges. The string is lexed as data; physical lines, shell
+continuations, heredoc data, wrappers, control-flow prefixes, and command substitutions are
+handled explicitly. When `--repo` is absent, two bounded read-only git calls with fixed
+argvs (`git rev-parse --show-toplevel`, then `git remote get-url origin`) establish work context. An untokenisable
+guarded shape is denied only when that enclosing work context is in scope.
+
+Scope is deliberately narrow. A call is covered when it originates in a `hermes-labs-ai/*`
+checkout, the Hermes infrastructure checkout used for upstream contributions, or explicitly
+targets `hermes-labs-ai/*`. A personal/non-Hermes source targeting a non-Hermes repository is
+silent. Metadata-only `gh pr edit`, read-only/help commands, shell comments and literal heredoc
+data, other `gh` nouns, and unrelated commands are also silent.
+
+For Codex, install it additively with `agent-signage install-publication-gate`; for Claude Code,
+use the equivalent settings entry below. See [Wire the adapter](#wire-the-adapter).
+
+### Attribution
+
+```
+<!-- hermes-labs:attribution v1 -->
+[Rolando Bosch](https://github.com/roli-lpci) is the responsible human contributor and provided
+active oversight and steering. This contribution was selected through
+[Hermes Labs](https://hermes-labs.ai)’ autonomous triage and executed through its engineering
+infrastructure.
+<!-- /hermes-labs:attribution -->
+```
+
+Generate it rather than typing it, so the wording has one source of truth:
+
+```bash
+python3 -m agent_signage attribution --kind contribution --oversight active
+python3 -m agent_signage attribution --kind review       --oversight none
+```
+
+The role noun is adapted to the work: **responsible human contributor** for a contribution,
+**responsible human reviewer** for a review. The oversight clause appears only when it was
+declared. The possessive follows the linked organization name in
+"[Hermes Labs](https://hermes-labs.ai)’ autonomous triage", making the trailing "its" refer to
+Hermes Labs rather than to the contribution.
+
+The block is delimited, so "exactly one attribution" is checkable. Line wrapping is allowed;
+rewording is not. A block inside fenced or indented code, a multiline backtick span, raw
+`pre`/`code`-like HTML, or an enclosing HTML comment is rejected, because a statement nobody
+sees as ordinary prose is not a disclosure.
+Disclosure lines named with `--preserve` must still be present, so an agent rewriting a body
+cannot quietly delete someone else's.
+
+### `--kind` and `--oversight` are caller declarations
+
+Stated plainly, because an earlier revision overstated it. Neither flag is verified by anything
+here. An earlier draft read them from an unsigned local JSON sidecar and called it an
+"attestation", which was worse than useless: ceremony that looked like verification, while
+anything able to write the body could write the sidecar. Renaming it would not have fixed the
+overclaim, so the sidecar is gone.
+
+What remains is the part that actually works: **`--oversight` has no default.** Claiming that a
+human provided active oversight and steering is the strongest statement this tool will publish
+about a person, so it is always an explicit, recorded choice by whoever ran the command, and
+the artifact may never state more than was declared. The sign printed at the moment of action
+says "declared oversight", not "verified oversight", for the same reason.
+
+The checker checks the block, not your prose. An earlier revision swept the whole body for
+phrases like "approved by" and "I reviewed"; an independent review was right that this rejects
+a maintainer's own true statement, misses any paraphrase of a false one, and buys the feeling
+of rigour rather than rigour. It is gone.
+
+### Recovery
+
+| Reason code | Fix |
+|---|---|
+| `attribution-missing`, `attribution-duplicated` | Regenerate with `agent-signage attribution`; keep exactly one block |
+| `attribution-hidden` | Move the block out of the code fence or HTML comment wrapping it |
+| `attribution-wording-mismatch`, `attribution-kind-mismatch` | Replace the block with generated text for the right `--kind` |
+| `oversight-claimed-beyond-declaration` | Either pass `--oversight active`, or emit the block with `--oversight none` |
+| `oversight-declared-but-not-stated` | Emit the block with `--oversight active` |
+| `contributor-mismatch` | The body names someone the declaration does not |
+| `disclosure-dropped` | Restore the disclosure line the rewrite removed |
+| `attribution-malformed` | Remove the control or bidi character from the block |
+
+A local attribution rejection has no effect of any kind: no child is started. On `pr-edit`, a
+candidate that passes locally is followed by a read-only live-body check; dropping a recognized
+disclosure then rejects with only that `gh pr view` call and no update.
+
+### Wire the adapter
+
+Codex has an additive installer for its user-level hook file:
+
+```bash
+agent-signage install-publication-gate
+```
+
+It preserves every existing hook group, creates a timestamped backup, writes atomically, and is
+idempotent. Restart Codex, open `/hooks`, and review and trust the new hook definition; Codex
+does not run a new non-managed hook before that trust step. The installer prints the exact
+backup or removal recovery path. The configuration is not retroactive: an already-running task
+that loaded hooks before installation remains uncovered until that restart and trust step.
+
+The equivalent Claude Code entry can be added to the settings file that owns the session:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /abs/path/to/agent-signage/scripts/gate.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+That entry is additive: it does not touch the existing `Read|Edit|Write|NotebookEdit|Grep|Glob`
+entry that runs the passive hook, and the two never share a process. Until the adapter is both
+installed and active in the harness, `gh pr create` remains reachable from Bash and the
+publisher is a convention, not a boundary.
+
+### What this does not give you
+
+- **Only the Bash tool, and only once wired and active.** A harness that reaches GitHub through the REST
+  API, a browser session, an MCP server, or its own built-in PR tool never produces a Bash
+  command, so this adapter never sees it. Codex and Claude Code are covered only when their
+  respective `PreToolUse` entry is active; Cursor, Aider, and other harnesses remain uncovered.
+- **A `PreToolUse` deny is a harness-level decision, not an OS one.** Anything that can spawn a
+  process outside the harness's tool loop — a Makefile target, a CI job, a shell the user opens
+  themselves — is outside it.
+- **`--oversight` is a declaration.** See above. It records who claimed what; it does not
+  establish that a person read anything.
+- **Exact readback is exact.** If GitHub ever normalises a body — line endings, trailing
+  whitespace — the publisher reports a mismatch and exits 4 rather than accepting the
+  difference. Keep bodies LF-only. This is the conservative direction on purpose, but it means
+  a mismatch is not automatically a security event; read the two digests it prints.
+- **It checks the artifact, not the work.** A body can carry a perfectly true attribution and
+  describe a change nobody should merge.
+- **Edit preservation is snapshot-bound.** `pr-edit` automatically binds conventional trailers
+  such as `Disclosure:`, `Co-Authored-By:`, and `Signed-off-by:` from the live body it reads;
+  use `--preserve` for project-specific wording. `gh pr edit` exposes no conditional revision
+  token, so a concurrent body edit after that pre-read remains a race. Exact post-write readback
+  proves what this publisher wrote, not that no one raced it.
+- **Nothing in this repository enforces the boundary on itself.**
+
 ## Verify it yourself
 
 ```bash
 agent-signage selftest        # asserts the runtime guarantees, no repo needed
 agent-signage doctor          # what is live, what is inert, and what it costs here
 pytest                        # full behavioural suite over real synthetic git repos
+pytest tests/test_publication.py  # the publisher and the Bash adapter, against a fake gh
 ```
 
 The exact-commit deterministic readback for `0.1.2`, including a safe isolated
 hook demonstration, is in [`evals/proof-0.1.2.json`](evals/proof-0.1.2.json).
+The live Codex installation probe for this boundary, including the intentionally harmless
+current-session non-enforcement observation, is in
+[`evals/codex-hook-installation.json`](evals/codex-hook-installation.json).
 
 ## Status and limitations
 
@@ -376,6 +593,11 @@ Limits worth knowing before you adopt:
   adversarially yet. Read the tests — they are the specification. Two guarantees published in
   0.1.0 and 0.1.1 did not hold as stated; both were found by auditing the shipped artifact
   against its own README, and both are corrected in 0.1.2. That is the honest track record.
+- **The publication boundary is only as good as its active wiring.** The publisher owns
+  execution and fails closed, which the passive file hook cannot. The separate Bash adapter
+  stops direct `gh pr create` and `gh pr edit` calls only after the harness has loaded it (and,
+  in Codex, the user has trusted it). API, browser, and other non-Bash paths are uncovered.
+  `--kind` and `--oversight` are caller declarations, not verified facts.
 - **The false-positive evidence is thin.** 0/12 and 0/8 on small corpora whose controls were
   arguably incapable of firing. That is direction, not a result.
 

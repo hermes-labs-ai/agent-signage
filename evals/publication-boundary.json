@@ -1,0 +1,387 @@
+{
+  "schema": "agent-signage/publication-boundary-matrix-v1",
+  "subject": "agent_signage.publish.publish_snapshot and agent_signage.gate.guarded_subcommand",
+  "recorded_against": "0.1.2 plus the publication boundary (unreleased)",
+  "how_to_run": "python3 -m pytest tests/test_publication.py -q",
+  "note": "Every case drives a real supported surface, not the pure checker. The 'publish' cases run the publisher end to end against a fake gh and assert the exit code, whether any gh child was started at all, and what bytes reached the child's stdin. The 'bash-boundary' cases run the PreToolUse adapter over a command string. An earlier revision's matrix only exercised check(), which proved nothing about the boundary that actually reaches GitHub.",
+  "gh": "tests/fake_gh.py -- real gh is never invoked",
+  "defaults": {
+    "op": "pr-create",
+    "wrap": "none",
+    "preserve": [],
+    "drop_preserved": false,
+    "gh_mode": "ok"
+  },
+  "cases": [
+    {
+      "name": "create-with-declared-oversight-publishes-and-verifies",
+      "why": "The intended path end to end: checked bytes go to gh on stdin and the readback matches.",
+      "surface": "publish",
+      "op": "pr-create",
+      "block": {"kind": "contribution", "oversight": "active"},
+      "declare": {"kind": "contribution", "oversight": "active"},
+      "expect": {"exit": 0, "gh_calls": 2, "stdin_is_snapshot": true}
+    },
+    {
+      "name": "edit-with-no-declared-oversight-publishes-and-verifies",
+      "why": "The lower claim is publishable, and pr-edit is the second supported operation.",
+      "surface": "publish",
+      "op": "pr-edit",
+      "block": {"kind": "review", "oversight": "none"},
+      "declare": {"kind": "review", "oversight": "none"},
+      "expect": {"exit": 0, "gh_calls": 3, "stdin_is_snapshot": true}
+    },
+    {
+      "name": "missing-attribution-never-reaches-gh",
+      "why": "A rejection has to happen before any child exists, or the rejection is decoration.",
+      "surface": "publish",
+      "block": null,
+      "declare": {"kind": "contribution", "oversight": "active"},
+      "expect": {"exit": 1, "gh_calls": 0, "codes": ["attribution-missing"]}
+    },
+    {
+      "name": "oversight-claimed-beyond-the-declaration-never-reaches-gh",
+      "why": "Active oversight is a declared fact with no default; prose may not exceed it.",
+      "surface": "publish",
+      "block": {"kind": "contribution", "oversight": "active"},
+      "declare": {"kind": "contribution", "oversight": "none"},
+      "expect": {"exit": 1, "gh_calls": 0, "codes": ["oversight-claimed-beyond-declaration"]}
+    },
+    {
+      "name": "declared-oversight-not-stated-never-reaches-gh",
+      "why": "The artifact and the declaration must agree in both directions.",
+      "surface": "publish",
+      "block": {"kind": "contribution", "oversight": "none"},
+      "declare": {"kind": "contribution", "oversight": "active"},
+      "expect": {"exit": 1, "gh_calls": 0, "codes": ["oversight-declared-but-not-stated"]}
+    },
+    {
+      "name": "review-wording-on-a-contribution-run-never-reaches-gh",
+      "why": "Contributor and reviewer are different roles and are adapted explicitly.",
+      "surface": "publish",
+      "block": {"kind": "review", "oversight": "active"},
+      "declare": {"kind": "contribution", "oversight": "active"},
+      "expect": {"exit": 1, "gh_calls": 0, "codes": ["attribution-kind-mismatch"]}
+    },
+    {
+      "name": "attribution-fenced-as-a-code-sample-never-reaches-gh",
+      "why": "A block that renders as an example is not a statement anyone reads.",
+      "surface": "publish",
+      "block": {"kind": "contribution", "oversight": "active"},
+      "wrap": "fence",
+      "declare": {"kind": "contribution", "oversight": "active"},
+      "expect": {"exit": 1, "gh_calls": 0, "codes": ["attribution-hidden"]}
+    },
+    {
+      "name": "attribution-inside-an-enclosing-html-comment-never-reaches-gh",
+      "why": "Wrapping the block in a comment is the other way to ship an invisible claim.",
+      "surface": "publish",
+      "block": {"kind": "contribution", "oversight": "active"},
+      "wrap": "comment",
+      "declare": {"kind": "contribution", "oversight": "active"},
+      "expect": {"exit": 1, "gh_calls": 0, "codes": ["attribution-hidden"]}
+    },
+    {
+      "name": "two-attributions-never-reach-gh",
+      "why": "Two blocks can disagree; a substring search would pass them both.",
+      "surface": "publish",
+      "block": {"kind": "contribution", "oversight": "active"},
+      "block_count": 2,
+      "declare": {"kind": "contribution", "oversight": "active"},
+      "expect": {"exit": 1, "gh_calls": 0, "codes": ["attribution-duplicated"]}
+    },
+    {
+      "name": "a-different-person-named-in-the-body-never-reaches-gh",
+      "why": "Responsibility is named by the declaration, not by whoever drafted the body.",
+      "surface": "publish",
+      "block": {"kind": "contribution", "oversight": "active",
+                "contributor": "Someone Else",
+                "contributor_url": "https://github.com/someone-else"},
+      "declare": {"kind": "contribution", "oversight": "active"},
+      "expect": {"exit": 1, "gh_calls": 0, "codes": ["contributor-mismatch"]}
+    },
+    {
+      "name": "a-dropped-maintainer-disclosure-never-reaches-gh",
+      "why": "An agent rewriting a body must not quietly delete someone else's disclosure.",
+      "surface": "publish",
+      "block": {"kind": "contribution", "oversight": "active"},
+      "preserve": ["Co-Authored-By: A Maintainer <m@example.com>"],
+      "drop_preserved": true,
+      "declare": {"kind": "contribution", "oversight": "active"},
+      "expect": {"exit": 1, "gh_calls": 0, "codes": ["disclosure-dropped"]}
+    },
+    {
+      "name": "a-preserved-disclosure-that-is-present-publishes",
+      "why": "The preserve check must not reject the artifact it exists to protect.",
+      "surface": "publish",
+      "block": {"kind": "contribution", "oversight": "active"},
+      "preserve": ["Co-Authored-By: A Maintainer <m@example.com>"],
+      "declare": {"kind": "contribution", "oversight": "active"},
+      "expect": {"exit": 0, "gh_calls": 2, "stdin_is_snapshot": true}
+    },
+    {
+      "name": "a-failing-gh-child-is-reported-not-swallowed",
+      "why": "Success must never be claimed over a child that failed.",
+      "surface": "publish",
+      "block": {"kind": "contribution", "oversight": "active"},
+      "declare": {"kind": "contribution", "oversight": "active"},
+      "gh_mode": "fail",
+      "expect": {"exit": 3, "gh_calls": 1, "child_status": 7, "no_success": true}
+    },
+    {
+      "name": "a-body-that-reads-back-different-is-not-a-publication",
+      "why": "gh exiting 0 is not evidence that the published body is the checked body.",
+      "surface": "publish",
+      "block": {"kind": "contribution", "oversight": "active"},
+      "declare": {"kind": "contribution", "oversight": "active"},
+      "gh_mode": "tampered-readback",
+      "expect": {"exit": 4, "gh_calls": 2, "no_success": true}
+    },
+    {
+      "name": "an-unreadable-readback-is-not-a-publication",
+      "why": "Unverified is a distinct outcome from verified, and is not rounded up.",
+      "surface": "publish",
+      "block": {"kind": "contribution", "oversight": "active"},
+      "declare": {"kind": "contribution", "oversight": "active"},
+      "gh_mode": "view-fails",
+      "expect": {"exit": 4, "gh_calls": 2, "no_success": true}
+    },
+
+    {
+      "name": "boundary-denies-a-bare-pr-create",
+      "surface": "bash-boundary",
+      "tool_field": "command",
+      "command": "gh pr create --title t --body-file b.md",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-a-bare-pr-edit",
+      "surface": "bash-boundary",
+      "command": "gh pr edit 12 --body-file b.md",
+      "expect": {"deny": "edit"}
+    },
+    {
+      "name": "boundary-denies-the-gh-pr-new-alias",
+      "why": "gh documents `pr new` as an alias of the creating operation.",
+      "surface": "bash-boundary",
+      "command": "gh pr new --title t",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-sudo-with-an-option-value",
+      "surface": "bash-boundary",
+      "command": "sudo -u root gh pr create --title t",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-env-with-a-boolean-option",
+      "surface": "bash-boundary",
+      "command": "env -i gh pr create --title t",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-nice-with-an-option-value",
+      "surface": "bash-boundary",
+      "command": "nice -n 5 gh pr create --title t",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-shell-negation",
+      "surface": "bash-boundary",
+      "command": "! gh pr create --title t",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-a-control-flow-body",
+      "surface": "bash-boundary",
+      "command": "if true; then gh pr create --title t; fi",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-a-compound-attempt",
+      "why": "A guarded call in the second segment is still a guarded call.",
+      "surface": "bash-boundary",
+      "command": "pytest -q && gh pr create --title t",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-a-semicolon-attempt",
+      "surface": "bash-boundary",
+      "command": "echo starting; gh pr edit 3 --body-file b.md",
+      "expect": {"deny": "edit"}
+    },
+    {
+      "name": "boundary-denies-a-command-substitution-attempt",
+      "surface": "bash-boundary",
+      "command": "echo $(gh pr create --title t)",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-a-backtick-substitution-attempt",
+      "surface": "bash-boundary",
+      "command": "echo `gh pr create --title t`",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-a-double-quoted-dollar-substitution",
+      "surface": "bash-boundary",
+      "command": "echo \"$(gh pr create --title t)\"",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-an-assigned-dollar-substitution",
+      "surface": "bash-boundary",
+      "command": "x=\"$(gh pr create --title t)\"",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-a-double-quoted-backtick-substitution",
+      "surface": "bash-boundary",
+      "command": "echo \"`gh pr create --title t`\"",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-an-escaped-line-continuation",
+      "surface": "bash-boundary",
+      "command": "gh\\\n pr create --title t",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-a-later-physical-line",
+      "surface": "bash-boundary",
+      "command": "echo ready\ngh pr create --title t",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-help-when-it-is-an-option-value",
+      "surface": "bash-boundary",
+      "command": "gh pr create --title --help --body x",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-an-absolute-path-and-env-prefix",
+      "surface": "bash-boundary",
+      "command": "GH_TOKEN=x /opt/homebrew/bin/gh pr create --title t",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-a-flag-shuffled-attempt",
+      "why": "The subcommand is found by position among bare tokens, not by assuming it is first.",
+      "surface": "bash-boundary",
+      "command": "gh --repo owner/repo pr create --title t",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-an-untokenisable-attempt",
+      "why": "Unbalanced quotes mean we cannot parse it, so the conservative answer is deny.",
+      "surface": "bash-boundary",
+      "command": "gh pr create --title \"unterminated",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-is-silent-on-read-only-gh",
+      "why": "An adapter that denied broadly would be switched off, and then guard nothing.",
+      "surface": "bash-boundary",
+      "command": "gh pr view 12 --json body",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-is-silent-on-a-search-whose-value-is-create",
+      "why": "A flag's value is not a subcommand.",
+      "surface": "bash-boundary",
+      "command": "gh pr list --search create",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-is-silent-when-two-flag-values-spell-pr-create",
+      "why": "Flag values anywhere after the real subcommand cannot be reinterpreted as a second command.",
+      "surface": "bash-boundary",
+      "command": "gh pr list --search pr --label create",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-is-silent-on-other-gh-nouns",
+      "surface": "bash-boundary",
+      "command": "gh issue create --title t",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-is-silent-on-a-quoted-mention",
+      "why": "Naming the command in an argument does not run it.",
+      "surface": "bash-boundary",
+      "command": "git commit -m \"document gh pr create\"",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-is-silent-after-a-shell-comment",
+      "why": "The shell never executes text after an unquoted comment marker.",
+      "surface": "bash-boundary",
+      "command": "echo ok # no publish; gh pr create",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-is-silent-on-gh-text-in-heredoc-data",
+      "why": "Heredoc content is data for the opening command, not a later shell command.",
+      "surface": "bash-boundary",
+      "command": "cat <<'EOF'\ngh pr create --repo hermes-labs-ai/r\nEOF",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-denies-dollar-substitution-in-an-unquoted-heredoc",
+      "surface": "bash-boundary",
+      "command": "cat <<EOF\n$(gh pr create --title t)\nEOF",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-denies-backticks-in-an-unquoted-tabbed-heredoc",
+      "surface": "bash-boundary",
+      "command": "cat <<-EOF\n\t`gh pr create --title t`\n\tEOF",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-is-silent-on-global-help",
+      "surface": "bash-boundary",
+      "command": "gh --help pr create",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-is-silent-on-pr-help",
+      "surface": "bash-boundary",
+      "command": "gh pr --help create",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-is-silent-on-create-help",
+      "surface": "bash-boundary",
+      "command": "gh pr create --help",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-is-silent-on-a-label-only-pr-edit",
+      "why": "Metadata-only PR edits do not publish a body and the supported publisher does not replace them.",
+      "surface": "bash-boundary",
+      "command": "gh pr edit 12 --add-label bug",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-is-silent-on-a-reviewer-only-pr-edit",
+      "surface": "bash-boundary",
+      "command": "gh pr edit 12 --add-reviewer alice",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-is-silent-on-unrelated-work",
+      "surface": "bash-boundary",
+      "command": "python3 -m pytest tests/ -q",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-is-silent-on-a-non-hermes-personal-pr",
+      "why": "The Hermes disclosure policy must not be imposed on unrelated personal work.",
+      "surface": "bash-boundary",
+      "scope": "unrelated",
+      "command": "gh pr create --repo someone/private-repo --title t",
+      "expect": {"deny": null}
+    }
+  ]
+}

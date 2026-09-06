@@ -262,3 +262,147 @@ offer at all, because the only thing an ack can suppress is the exact fact
 that was true when it was given. `test_ack_expires_when_upstream_moves`
 asserts this directly: acknowledging one state, then advancing upstream by one
 more commit, makes the sign speak again under the new state.
+
+## Why the publication boundary is not a sign
+
+Every sign in this repository is barred from blocking, and `hook.py` states the
+contract plainly: "It never blocks... It fails open. Every error path --
+malformed input, missing git, a hung subprocess, an unwritable state dir --
+ends in silence and exit 0." That is what makes it acceptable in front of every
+file read, and it is the reason a publication requirement cannot live there.
+
+Attribution on an outgoing public artifact is not a fact an agent might find
+useful; it is a condition the artifact has to satisfy before it leaves. A
+mechanism that says nothing when it breaks cannot express that condition. If
+the publisher were registered as a sign, its rejection would be routed through a
+hook that is structurally incapable of exiting non-zero -- the failure mode
+would not be a missed sign, it would be *presenting a gate that cannot gate*.
+That is worse than having no gate: the passive path would carry the appearance
+of enforcement, and the appearance is what someone would rely on.
+
+So the boundary is separate, with the opposite contract, and the separation is
+asserted rather than documented: `test_the_generic_hook_is_unchanged_and_cannot_deny`
+fails if `hook.py` ever mentions the boundary or gains a decision field, and
+`agent-signage selftest` re-checks it in every install.
+
+## Why the publisher runs gh instead of preparing a command
+
+The first version of this only *prepared* an argv and handed it back. An
+independent review was right that this is not a boundary, and the reason is
+worth writing down because it generalises.
+
+A prepared command is a recommendation. What the caller does with it is
+unobservable from here: it can be edited, ignored, run twice, or run after the
+file has changed. Worse, the prepared command named the body by path, so the
+only thing the check could establish was a property of the bytes *at check
+time*. Between the check and `gh` opening that path there is a window, and
+everything the check proved lives on the wrong side of it. "Checked" and
+"published" were never the same bytes by construction -- only by luck and
+timing.
+
+Owning execution collapses the window rather than narrowing it. The body is
+opened once, on a descriptor rather than a path (`O_NOFOLLOW`, so a symlink is
+refused at open instead of resolved, and `fstat` on the descriptor, so the thing
+measured is the thing read). Everything downstream sees that snapshot. `gh` is
+invoked with `--body-file -` and the snapshot bytes on its stdin, so `gh` is
+never given the path at all: there is no second read for a mutation to land in.
+`test_only_the_snapshot_can_reach_gh` proves it the direct way -- it rewrites
+the file between the snapshot and the child, and asserts the child still
+received the original bytes.
+
+The same reasoning ends at the readback. `gh` exiting 0 is evidence that `gh`
+was satisfied, not that the published body is the checked body, so success is
+claimed only after `gh pr view --json body` returns something exactly equal to
+the snapshot text. Three outcomes that a less careful design would collapse into
+"published" stay distinct: the child failed (exit 3, with its status and
+stderr), the child succeeded but the body could not be read back or did not
+match (exit 4), and the body matched (exit 0). Exit 4 says explicitly that the
+pull request exists and nothing was reverted, because the honest report of a
+half-completed action is not silence.
+
+## Why the unsigned sidecar was removed rather than renamed
+
+An earlier revision carried oversight in a local JSON file that named the
+artifact's sha256, and called it an "attestation". The independent review's
+objection was exact: nothing signed it, and anything able to write the body
+could write it. The digest binding was real, but it established that two files
+agreed -- not that a person had read either one.
+
+The available fixes were to rename it to "declaration", to sign it, or to delete
+it. Renaming keeps the ceremony and the file-handling code while admitting the
+mechanism proves nothing, which is the worst of the three: a reader still sees a
+JSON document with a schema and a digest and infers verification from the shape.
+Signing is a real answer and a much larger one, and this repository has no key
+management to hang it on.
+
+So it is deleted, and what replaced it is smaller and does not overclaim.
+`--kind` and `--oversight` are flags with no defaults. `--oversight active` is
+the strongest statement this tool will publish about a person, and it is now
+always an explicit act by whoever ran the command, recorded in the sign that
+prints at the moment of action as "declared oversight" -- never "verified".
+`OVERSIGHT_LEVELS` lists `none` first for the same reason: there is no ordering
+in which "active" could become the fallback.
+
+## Why the checker stopped reading the author's prose
+
+The same revision scanned the whole body for phrases like "approved by",
+"I reviewed", and "on behalf of", and rejected the artifact when it found them.
+The review called this false-positive-prone censorship, and testing it against
+realistic bodies confirmed it: "Approved by the release team in #412" is a
+maintainer's own true statement, and the scan rejected it. Meanwhile any
+paraphrase walked straight through, because the failure mode of a keyword sweep
+over English is that it is simultaneously too strict and too weak.
+
+The property that scan was reaching for -- never fabricate authorship,
+inspection, endorsement or vendor attribution -- is now enforced where it is
+actually checkable. The published wording comes from one function, is compared
+character for character after whitespace normalisation, and cannot contain a
+fabricated claim because it cannot contain anything that was not generated. The
+oversight clause appears only at the level explicitly declared. Everything else
+in the body belongs to whoever wrote it, and this tool has no opinion about it.
+`test_a_maintainers_own_endorsement_line_is_not_censored` pins that boundary.
+
+## Why a block nobody can see is not a disclosure
+
+Two ways to ship an attribution that satisfies a substring search and discloses
+nothing: put it in a fenced code region, where it renders as a sample, or wrap
+it in an HTML comment, where it does not render at all. Both were accepted by
+the first version, which only asked whether the markers appeared in the text.
+
+`locate_block` therefore locates rather than matches. A fence closes only with
+the same delimiter character and at least the opener's length; shorter or
+different delimiters remain content. Indented code, multiline backtick spans,
+and raw `pre`/`code`-like HTML regions are also excluded. HTML comments are
+scanned left to right, first `-->` closing. In a correct artifact the only
+comments touching the block are the two markers, which begin exactly at the
+block's own offsets -- so the rule is simply that no *other* comment may overlap
+the block region. That catches an enclosing wrapper and a comment spliced into
+the middle, and leaves ordinary editorial comments elsewhere in the body alone,
+which `test_unrelated_comments_and_fences_elsewhere_do_not_false_positive`
+checks in both directions.
+
+## Why the Bash adapter denies narrowly and never runs the judged command
+
+The publisher owns the path that goes through it. `gh` is still on `PATH`, so
+without a second mechanism the boundary is a convention. `gate.py` is that
+mechanism for exactly one surface: the harness's Bash tool.
+
+Two decisions define it. First, it never executes the command it is judging.
+The string is lexed as data, with explicit handling for physical lines, line
+continuations, literal and expanding heredocs, wrappers, control flow, and
+quoted or unquoted command substitutions. When the command does not name a
+target, two bounded fixed-argv measurements (`git rev-parse --show-toplevel`, then
+`git remote get-url origin`) establish the source work context; neither contacts the
+network.
+
+Second, it denies narrowly. A create (including `gh pr new`) or body-mutating
+edit is covered only in a Hermes source context or with an explicit Hermes Labs
+target. Metadata-only edits and non-Hermes source/target pairs stay silent.
+Within a segment the actual noun and immediate subcommand are positional, so
+`gh pr list --search pr --label create` is not reinterpreted as a create.
+
+What it does not cover is stated in the README rather than implied here: one
+tool, and only once a compatible harness has loaded the adapter. The Codex
+installer writes that hook configuration additively; Claude Code uses the
+equivalent manual settings entry. Neither covers API, browser, or other
+non-Bash paths.

@@ -105,6 +105,12 @@ def current_branch(root: str) -> Optional[str]:
 
 
 @functools.lru_cache(maxsize=64)
+def origin_url(root: str) -> Optional[str]:
+    """The configured origin URL, measured without contacting the network."""
+    return _git(root, "remote", "get-url", "origin")
+
+
+@functools.lru_cache(maxsize=64)
 def upstream_ref(root: str) -> Optional[str]:
     """Configured upstream for HEAD, e.g. 'origin/main'. None if unset."""
     return _git(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
@@ -244,6 +250,7 @@ _CACHED = (
     repo_root,
     git_dir,
     current_branch,
+    origin_url,
     upstream_ref,
     upstream_sha,
     commits_behind,

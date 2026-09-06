@@ -1,0 +1,606 @@
+"""PreToolUse Bash boundary adapter for scoped PR-body publication.
+
+The publisher only owns the path that goes through it. An agent with a shell can
+reach `gh` without it, so a checkable verdict is not yet a chokepoint. This
+adapter is the chokepoint for one surface -- the harness's Bash tool -- and it
+does exactly one thing: in a Hermes work context, when a Bash command would
+create a PR or replace its body directly, it denies and names the publisher.
+
+Two contracts are deliberately not shared with `hook.py`:
+
+  * `hook.py` fails open and can never deny. That is what makes it safe in front
+    of every file read, and it is untouched by this module. This adapter is a
+    separate entry point with a separate matcher; nothing here is registered as
+    a sign and nothing here runs on the file path.
+  * This adapter *can* deny, so its unknown cases resolve conservatively. An
+    unparseable command that still looks like a guarded `gh` invocation is
+    denied rather than waved through.
+
+Nothing executes the command under judgment. The string is lexed and inspected
+as data. Two bounded fixed-argv git measurements (`git rev-parse --show-toplevel`,
+then `git remote get-url origin`) may run to establish work context when the
+command does not name a target.
+
+Scope is narrow on purpose. Non-Hermes source/target pairs, metadata-only PR
+edits, `gh pr view`, `gh pr list`, `gh issue create`, `git push`, and unrelated
+commands are silent -- an adapter that denied broadly would guard nothing.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shlex
+import sys
+from typing import Any, Dict, List, Optional, Tuple
+
+from . import gitfacts
+
+GUARDED_SUBCOMMANDS = ("create", "edit")
+SCOPED_OWNERS = ("hermes-labs-ai",)
+SCOPED_SOURCE_REPOS = ("roli-lpci/hermes-infra",)
+
+# Operators that end one command and start another. `shlex` in punctuation mode
+# returns each run of `();<>|&` as its own token, so splitting on these is what
+# stops a compound line -- `make test && gh pr create`, `echo hi; gh pr edit 3`,
+# `$(gh pr create)` -- from smuggling a guarded call past the first segment.
+_OPERATORS = {";", "&&", "||", "|", "&", "|&", "(", ")", "<", ">", ">>", "<<",
+              "&&&", ";;", "\n", "`", "$"}
+
+# Stripped from the head of a segment before looking for the executable.
+_WRAPPERS = {"sudo", "env", "command", "nohup", "time", "nice", "stdbuf", "exec",
+             "builtin", "setsid", "doas"}
+_CONTROL_PREFIXES = {"!", "if", "then", "elif", "else", "while", "until", "do"}
+_WRAPPER_VALUE_OPTIONS = {
+    "sudo": {"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt",
+             "-C", "--close-from", "-D", "--chdir"},
+    "doas": {"-u", "-C"},
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "nice": {"-n", "--adjustment"},
+    "stdbuf": {"-i", "--input", "-o", "--output", "-e", "--error"},
+    "exec": {"-a"},
+    "time": {"-f", "--format", "-o", "--output"},
+}
+
+# Leading punctuation left on a token by substitution or grouping syntax:
+# `$(gh ...)`, `` `gh ...` ``, `(gh ...)`, `{ gh ...; }`.
+_LEAD = "$({`<>"
+_TRAIL = ")}`;"
+
+_SHELL_INTERPRETERS = {"bash", "dash", "fish", "ksh", "sh", "zsh"}
+_DYNAMIC_GUARDED_RE = re.compile(
+    r"(?:^|[;&|(\n])\s*[\"']?"
+    r"(?:\$\([^\n)]*\)|`[^\n`]*`|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*)"
+    r"[\"']?\s+pr\s+(?P<operation>create|new|edit)\b"
+    r"(?P<tail>[^;&|\n]*)",
+)
+
+_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# Global gh options whose value may appear before the command noun. Keeping
+# these explicit matters: deleting every option token but leaving every value
+# behind made `gh pr list --search pr --label create` look like `pr create`.
+_GH_VALUE_OPTIONS = {"--hostname", "--repo", "-R"}
+# The conservative fallback, used only when the line cannot be tokenised.
+_RAW_RE = re.compile(
+    r"(?:^|[\s;&|(`$])gh(?:\.exe)?\b[^;&|\n]*?\bpr\b[^;&|\n]*?\b(?:create|new|edit)\b")
+# Explicit scoped target in a line that could not be tokenised; the fallback
+# must not be narrower than `run`, which honours `--repo` regardless of cwd.
+_RAW_SCOPED_TARGET_RE = re.compile(
+    r"(?:--repo|-R)(?:=|\s+)['\"]?(?:https?://github\.com/)?(?:%s)/"
+    % "|".join(re.escape(owner) for owner in SCOPED_OWNERS), re.IGNORECASE)
+_GITHUB_REMOTE_RE = re.compile(
+    r"github\.com(?::|/)([^/]+)/([^/]+?)(?:\.git)?$", re.IGNORECASE)
+_BODY_FLAGS = ("--body", "--body-file", "-b", "-F")
+_HEREDOC_RE = re.compile(
+    r"<<(?P<dash>-)?\s*(?P<token>'[^']+'|\"[^\"]+\"|\\[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]+)")
+_GH_OPTIONS_WITH_VALUES = {
+    "--repo", "-R", "--hostname", "--title", "-t", "--body", "-b", "--body-file", "-F",
+    "--base", "-B", "--head", "-H", "--assignee", "-a", "--label", "-l",
+    "--milestone", "-m", "--project", "-p", "--reviewer", "-r", "--template", "-T",
+    "--recover", "--add-assignee", "--remove-assignee", "--add-label", "--remove-label",
+    "--add-project", "--remove-project", "--add-reviewer", "--remove-reviewer",
+}
+
+REASON = (
+    "agent-signage: direct `gh pr {sub}` is not the supported publication path for this "
+    "repository. Publish through the checked boundary instead, which validates the "
+    "attribution on the exact bytes it sends and verifies the published body afterwards:\n"
+    "  python3 -m agent_signage publish {op} --body-file /abs/body.md "
+    "--target OWNER/REPO --kind contribution --oversight none"
+    "{extra}\n"
+    "Choose `--kind review` or `--oversight active` only when those declarations are true. "
+    "`--oversight` has no default and is a caller declaration, not a verified fact. "
+    "Read-only gh commands such as `gh pr view` and `gh pr list` are unaffected."
+)
+
+
+def _segments(tokens: List[str]) -> List[List[str]]:
+    out: List[List[str]] = [[]]
+    for token in tokens:
+        if token in _OPERATORS or (token and all(char in ";&|()<>`$\n" for char in token)):
+            out.append([])
+        else:
+            out[-1].append(token)
+    return [segment for segment in out if segment]
+
+
+def _executable(segment: List[str]) -> Optional[int]:
+    """Index of the token that names the program, past assignments and wrappers."""
+    index = 0
+    while index < len(segment):
+        token = segment[index].lstrip(_LEAD)
+        if not token or _ASSIGNMENT_RE.match(token) or token in _CONTROL_PREFIXES:
+            index += 1
+            continue
+        if token in _WRAPPERS:
+            wrapper = token
+            index += 1
+            while index < len(segment):
+                option = segment[index].lstrip(_LEAD)
+                if option == "--":
+                    index += 1
+                    break
+                if not option.startswith("-") or option == "-":
+                    break
+                index += 1
+                if (option.split("=", 1)[0] in _WRAPPER_VALUE_OPTIONS.get(wrapper, set())
+                        and "=" not in option and index < len(segment)):
+                    index += 1
+            continue
+        return index
+    return None
+
+
+def _guarded_subcommand(segment: List[str]) -> Optional[str]:
+    """`gh ... pr create|edit` -> the subcommand, else None.
+
+    The command noun and its immediate subcommand are positional. Options that
+    gh accepts before the noun are skipped with their values; tokens after the
+    immediate subcommand are irrelevant. Thus `gh --repo o/r pr create` is a
+    create, while `gh pr list --search pr --label create` remains a list.
+    """
+    start = _executable(segment)
+    if start is None:
+        return None
+    name = segment[start].lstrip(_LEAD).rstrip(_TRAIL)
+    name = name.rsplit("/", 1)[-1]
+    if name not in ("gh", "gh.exe"):
+        return None
+    args = [t.lstrip(_LEAD).rstrip(_TRAIL) for t in segment[start + 1:]]
+    if _has_effective_help(args):
+        return None
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token in _GH_VALUE_OPTIONS:
+            index += 2
+            continue
+        if token.startswith("--") and "=" in token:
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        break
+    if index >= len(args) or args[index] != "pr":
+        return None
+    index += 1
+    while index < len(args) and args[index].startswith("-"):
+        if args[index] in _GH_VALUE_OPTIONS and "=" not in args[index]:
+            index += 2
+        else:
+            index += 1
+    if index >= len(args):
+        return None
+    operation = args[index]
+    if operation == "new":
+        return "create"
+    if operation == "create":
+        return "create"
+    if operation == "edit" and any(
+        token in _BODY_FLAGS
+        or token.startswith("--body=")
+        or token.startswith("--body-file=")
+        or (token.startswith("-b") and token != "-b")
+        or (token.startswith("-F") and token != "-F")
+        for token in args[index + 1:]
+    ):
+        return "edit"
+    return None
+
+
+def _has_effective_help(args: List[str]) -> bool:
+    """Help/version flags that are options, not values of another option."""
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token in _GH_OPTIONS_WITH_VALUES:
+            index += 2
+            continue
+        if token in {"--help", "-h", "--version"}:
+            return True
+        index += 1
+    return False
+
+
+def _token_segments(command: str) -> Optional[List[List[str]]]:
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n`$")
+        lexer.whitespace_split = True
+        lexer.whitespace = " \t\r"
+        lexer.commenters = "#"
+        return _segments(list(lexer))
+    except ValueError:
+        return None
+
+
+def _owner_from_repo(value: str) -> Optional[str]:
+    pieces = value.removesuffix(".git").split("/")
+    if len(pieces) < 2:
+        return None
+    owner = pieces[-2]
+    return owner.lower() if re.fullmatch(r"[A-Za-z0-9_.-]+", owner) else None
+
+
+def _explicit_owner(segment: List[str]) -> Tuple[bool, Optional[str]]:
+    """Whether --repo/-R was explicit, and its GitHub owner when parseable."""
+    for index, raw in enumerate(segment):
+        token = raw.lstrip(_LEAD).rstrip(_TRAIL)
+        if token in {"--repo", "-R"}:
+            if index + 1 >= len(segment):
+                return True, None
+            return True, _owner_from_repo(segment[index + 1].strip("'\""))
+        if token.startswith("--repo="):
+            return True, _owner_from_repo(token.split("=", 1)[1])
+        if token.startswith("-R="):
+            return True, _owner_from_repo(token.split("=", 1)[1])
+        if token.startswith("-R") and len(token) > 2:
+            return True, _owner_from_repo(token[2:])
+    return False, None
+
+
+def _cwd_repo(cwd: object) -> Optional[str]:
+    if not isinstance(cwd, str) or not cwd:
+        return None
+    root = gitfacts.repo_root(cwd)
+    if root is None:
+        return None
+    remote = gitfacts.origin_url(root)
+    match = _GITHUB_REMOTE_RE.search(remote or "")
+    return "%s/%s" % (match.group(1).lower(), match.group(2).lower()) if match else None
+
+
+def _repo_is_scoped(repo: Optional[str]) -> bool:
+    if repo is None:
+        return False
+    owner = repo.split("/", 1)[0]
+    return owner in SCOPED_OWNERS or repo in SCOPED_SOURCE_REPOS
+
+
+def _guarded_segments(
+    command: str, depth: int = 0
+) -> List[Tuple[str, Optional[List[str]]]]:
+    # Bash removes escaped physical newlines before tokenisation. `shlex`
+    # otherwise leaves the newline in the executable token (`gh\n`) and misses
+    # the invocation it will become.
+    command = _strip_heredoc_bodies(_remove_line_continuations(command))
+    segments = _token_segments(command)
+    if segments is None:
+        match = _RAW_RE.search(command)
+        if match is None:
+            return []
+        matched = match.group(0)
+        return [("edit" if re.search(r"\bedit\b", matched) else "create", None)]
+    guarded = [(found, segment) for segment in segments
+               for found in [_guarded_subcommand(segment)] if found is not None]
+    if depth >= 4:
+        return guarded
+    for nested in _substitution_commands(command) + _indirect_command_strings(segments):
+        guarded.extend(_guarded_segments(nested, depth + 1))
+    for match in _DYNAMIC_GUARDED_RE.finditer(command):
+        operation = match.group("operation")
+        candidate = "gh pr %s%s" % (operation, match.group("tail"))
+        dynamic = _guarded_subcommand(_token_segments(candidate)[0])
+        if dynamic is not None:
+            guarded.append((dynamic, None))
+    return guarded
+
+
+def _indirect_command_strings(segments: List[List[str]]) -> List[str]:
+    """Shell/eval payloads that will be parsed again before execution."""
+    found = []
+    for segment in segments:
+        found.extend(_env_split_strings(segment))
+        start = _executable(segment)
+        if start is None:
+            continue
+        name = segment[start].lstrip(_LEAD).rstrip(_TRAIL).rsplit("/", 1)[-1]
+        args = segment[start + 1:]
+        if name == "eval":
+            if args and args[0] == "--":
+                args = args[1:]
+            if args:
+                found.append(" ".join(args))
+            continue
+        if name not in _SHELL_INTERPRETERS:
+            continue
+        for index, token in enumerate(args):
+            if token == "-c" or (
+                token.startswith("-") and not token.startswith("--") and "c" in token[1:]
+            ):
+                if index + 1 < len(args):
+                    found.append(args[index + 1])
+                break
+    return found
+
+
+def _env_split_strings(segment: List[str]) -> List[str]:
+    """Commands `env -S` reparses after ordinary shell tokenisation."""
+    found = []
+    index = 0
+    while index < len(segment):
+        token = segment[index].lstrip(_LEAD)
+        if not token or _ASSIGNMENT_RE.match(token) or token in _CONTROL_PREFIXES:
+            index += 1
+            continue
+        if token not in _WRAPPERS:
+            break
+        wrapper = token
+        index += 1
+        while index < len(segment):
+            option = segment[index].lstrip(_LEAD)
+            if option == "--":
+                index += 1
+                break
+            if not option.startswith("-") or option == "-":
+                break
+            index += 1
+            name = option.split("=", 1)[0]
+            if wrapper == "env" and name in {"-S", "--split-string"}:
+                if "=" in option:
+                    found.append(option.split("=", 1)[1])
+                elif index < len(segment):
+                    found.append(segment[index])
+            if (name in _WRAPPER_VALUE_OPTIONS.get(wrapper, set())
+                    and "=" not in option and index < len(segment)):
+                index += 1
+    return found
+
+
+def _remove_line_continuations(command: str) -> str:
+    """Apply Bash's backslash-newline removal without changing single quotes."""
+    out = []
+    index = 0
+    single = False
+    double = False
+    while index < len(command):
+        char = command[index]
+        if char == "'" and not double:
+            single = not single
+            out.append(char)
+            index += 1
+            continue
+        if char == '"' and not single:
+            double = not double
+            out.append(char)
+            index += 1
+            continue
+        if char == "\\" and not single:
+            if command[index + 1:index + 3] == "\r\n":
+                index += 3
+                continue
+            if command[index + 1:index + 2] == "\n":
+                index += 2
+                continue
+            if index + 1 < len(command):
+                out.extend(command[index:index + 2])
+                index += 2
+                continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _strip_heredoc_bodies(command: str) -> str:
+    """Remove literal heredoc data while retaining the command that opens it."""
+    kept = []
+    pending: List[Tuple[str, bool, bool]] = []
+    for line in command.splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        if pending:
+            delimiter, strip_tabs, literal = pending[0]
+            candidate = content.lstrip("\t") if strip_tabs else content
+            if candidate == delimiter:
+                pending.pop(0)
+            elif not literal:
+                for nested in _substitution_commands(content):
+                    kept.append("\n$(%s)\n" % nested)
+            kept.append("\n" if line.endswith(("\n", "\r")) else "")
+            continue
+        kept.append(line)
+        for match in _HEREDOC_RE.finditer(content):
+            token = match.group("token")
+            literal = token.startswith(("'", '"', "\\"))
+            delimiter = token[1:-1] if token.startswith(("'", '"')) else (
+                token[1:] if token.startswith("\\") else token)
+            pending.append((delimiter, bool(match.group("dash")), literal))
+    return "".join(kept)
+
+
+def _substitution_commands(command: str) -> List[str]:
+    """Command bodies Bash executes inside `$()` or backticks, even in `"..."`."""
+    found = []
+    index = 0
+    single = False
+    double = False
+    while index < len(command):
+        char = command[index]
+        if char == "\\" and not single and index + 1 < len(command):
+            index += 2
+            continue
+        if char == "'" and not double:
+            single = not single
+            index += 1
+            continue
+        if char == '"' and not single:
+            double = not double
+            index += 1
+            continue
+        if char == "#" and not single and not double and (
+            index == 0 or command[index - 1].isspace()
+        ):
+            newline = command.find("\n", index)
+            index = len(command) if newline < 0 else newline + 1
+            continue
+        if not single and command[index:index + 2] == "$(":
+            start = index + 2
+            depth = 1
+            cursor = start
+            inner_single = False
+            inner_double = False
+            while cursor < len(command):
+                current = command[cursor]
+                if current == "\\" and not inner_single and cursor + 1 < len(command):
+                    cursor += 2
+                    continue
+                if current == "'" and not inner_double:
+                    inner_single = not inner_single
+                elif current == '"' and not inner_single:
+                    inner_double = not inner_double
+                elif not inner_single and not inner_double:
+                    if command[cursor:cursor + 2] == "$(":
+                        depth += 1
+                        cursor += 2
+                        continue
+                    if current == ")":
+                        depth -= 1
+                        if depth == 0:
+                            found.append(command[start:cursor])
+                            index = cursor + 1
+                            break
+                cursor += 1
+            else:
+                index += 2
+            continue
+        if not single and char == "`":
+            cursor = index + 1
+            while cursor < len(command):
+                if command[cursor] == "\\" and cursor + 1 < len(command):
+                    cursor += 2
+                    continue
+                if command[cursor] == "`":
+                    found.append(command[index + 1:cursor])
+                    index = cursor + 1
+                    break
+                cursor += 1
+            else:
+                index += 1
+            continue
+        index += 1
+    return found
+
+
+def guarded_subcommand(command: str) -> Optional[str]:
+    """None when the command is none of our business. Never executes anything."""
+    if not isinstance(command, str) or not command.strip():
+        return None
+    guarded = _guarded_segments(command)
+    return guarded[0][0] if guarded else None
+
+
+def deny_output(subcommand: str) -> Dict[str, Any]:
+    op = "pr-%s" % subcommand
+    extra = " --title 'feat: ...'" if subcommand == "create" else " --pr N"
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": REASON.format(sub=subcommand, op=op, extra=extra),
+        }
+    }
+
+
+def run(raw: str) -> Optional[Dict[str, Any]]:
+    """Core logic: the payload in, a deny object or None out."""
+    try:
+        payload = json.loads(raw) if raw and raw.strip() else None
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    tool_name = payload.get("tool_name")
+    if isinstance(tool_name, str) and tool_name and tool_name != "Bash":
+        return None
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
+    # Claude Code names this field `command`; Codex unified exec names it
+    # `cmd`. They are the same Bash surface and both must cross this boundary.
+    command = tool_input.get("command")
+    if not isinstance(command, str):
+        command = tool_input.get("cmd")
+    if not isinstance(command, str):
+        return None
+
+    cwd_repo = _cwd_repo(payload.get("cwd"))
+    for subcommand, segment in _guarded_segments(command):
+        if segment is None:
+            # The line could not be tokenised. An explicit scoped target is
+            # still recognisable as text, and the fallback must not be
+            # narrower than the parsed path.
+            target_is_scoped = bool(_RAW_SCOPED_TARGET_RE.search(command))
+        else:
+            explicit, owner = _explicit_owner(segment)
+            target_is_scoped = explicit and owner in SCOPED_OWNERS
+        if _repo_is_scoped(cwd_repo) or target_is_scoped:
+            return deny_output(subcommand)
+    return None
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """Always exits 0; the decision travels in the JSON, not the status.
+
+    Conservative on its own failure: if judging the payload raises, but the raw
+    input still carries the literal shape of a guarded call, deny. Silence on an
+    internal error would be a gate that fails open.
+    """
+    try:
+        raw = sys.stdin.read()
+    except Exception:
+        return 0
+    try:
+        out = run(raw)
+    except Exception:
+        # Judge the command string when the payload still yields one; in the
+        # raw JSON the command follows a quote, which `_RAW_RE` does not treat
+        # as a command boundary.
+        text = raw or ""
+        repo = None
+        try:
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                tool_input = payload.get("tool_input")
+                if isinstance(tool_input, dict):
+                    command = tool_input.get("command")
+                    if not isinstance(command, str):
+                        command = tool_input.get("cmd")
+                    if isinstance(command, str):
+                        text = command
+                repo = _cwd_repo(payload.get("cwd"))
+        except Exception:
+            pass
+        match = _RAW_RE.search(text)
+        scoped = _repo_is_scoped(repo) or bool(_RAW_SCOPED_TARGET_RE.search(text))
+        out = deny_output("edit" if match and "edit" in match.group(0) else "create") \
+            if match and scoped else None
+    if out is not None:
+        try:
+            sys.stdout.write(json.dumps(out))
+        except Exception:
+            return 0
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
