@@ -20,6 +20,7 @@ and silence the rest of the time.
 - [Acknowledging](#acknowledging)
 - [Configuration](#configuration)
 - [Adding your own sign](#adding-your-own-sign)
+- [Operational cards](#operational-cards)
 - [Verify it yourself](#verify-it-yourself)
 - [Status and limitations](#status-and-limitations)
 - [Research](#research)
@@ -306,6 +307,42 @@ A sign must be **sound** (report a measurement, never an inference), **silent** 
 nothing when there is nothing to say), and **actionable** (end in the command that resolves
 it). Anything that cannot meet all three is not a sign.
 
+## Operational cards
+
+Some facts only become useful after another tool has classified an action boundary. For
+example, a release gate may know that one exact command would publish to a public repository.
+The checkout-local renderer gives that caller a small, consistent way to present a trusted
+local card at that moment:
+
+```bash
+python3 scripts/render.py \
+  --card /absolute/path/to/card.json \
+  --format text \
+  --context "owner/repository version"
+```
+
+A card is a JSON object with exactly four nonempty, one-line string fields:
+
+```json
+{
+  "id": "release.authorization",
+  "headline": "PUBLIC RELEASE",
+  "fact": "The release gate classified this command as a public release boundary.",
+  "next": "Check current authorization before continuing."
+}
+```
+
+Use `--format text` when a caller needs the rendered line, or `--format hook` for the standard
+Claude Code `PreToolUse` `additionalContext` envelope. Optional `--context` is bounded and JSON
+quoted as target data; it is never interpolated into the card. Card fields and total output are
+also bounded, and malformed cards make the command fail with no stdout so callers can use a
+known fallback.
+
+The renderer does not inspect shell commands, decide whether a card applies, grant approval,
+or allow or block an action. Keep cards in a trusted local configuration path. The caller that
+already identifies the boundary owns its facts, authorization checks, enforcement, and fallback.
+This keeps operational guidance timely without turning agent-signage into a policy engine.
+
 ## Verify it yourself
 
 ```bash
@@ -319,7 +356,7 @@ hook demonstration, is in [`evals/proof-0.1.2.json`](evals/proof-0.1.2.json).
 
 ## Status and limitations
 
-`0.1.2` — early, and honest about it. Six signs, 105 tests over real synthetic git repositories,
+`0.1.2` — early, and honest about it. Six signs, tested over real synthetic git repositories,
 in production use at Hermes Labs. The sign registry is stable and extensible.
 
 Limits worth knowing before you adopt:

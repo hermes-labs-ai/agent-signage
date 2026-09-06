@@ -65,6 +65,7 @@ include = [
   "/tests",
   "/docs",
   "/examples",
+  "/scripts",
   "/claude-plugin",
   "/.github",
   "/README.md",

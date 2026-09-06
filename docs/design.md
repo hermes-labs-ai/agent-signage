@@ -1,8 +1,8 @@
 # Design
 
 This document draws directly from the module docstrings in `src/agent_signage/`.
-It explains the choices, not the mechanics — the mechanics are the code and the
-103 tests in `tests/`, which are the specification.
+It explains the choices, not the mechanics — the mechanics are the code and
+the suite in `tests/`, which are the specification.
 
 ## Origin
 
