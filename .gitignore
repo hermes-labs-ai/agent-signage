@@ -12,3 +12,6 @@ GO-LIVE.sh
 
 # Operator strategy notes: must never reach the package or the public repo
 integrations/
+
+# Reliability Lab isolated dev venv for this clone (never shipped)
+/.venv/

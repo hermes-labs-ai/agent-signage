@@ -1,0 +1,20 @@
+{
+  "envelope": "hermes.reliability-lab.result/1",
+  "tool": "rule-audit",
+  "toolVersion": "0.2.0",
+  "command": "audit",
+  "mode": "executed",
+  "status": "pass",
+  "inputHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "findings": [
+    {
+      "id": "gap.1",
+      "severity": "fail",
+      "summary": "a coverage gap"
+    }
+  ],
+  "exitCode": 0,
+  "timestamp": "2026-09-07T00:00:00Z",
+  "gitSha": "cccccccccccccccccccccccccccccccccccccccc",
+  "data": {}
+}

@@ -41,6 +41,28 @@ class Card:
     fact: str
     next: str
 
+    @classmethod
+    def strict(cls, id: str, headline: str, fact: str, next: str) -> "Card":
+        """Build a Card with the same bounds and shape checks ``load_card`` applies.
+
+        ``Card(...)`` (the bare dataclass constructor) performs no validation at
+        all -- a caller building a card programmatically, rather than loading one
+        from a trusted JSON file, could otherwise hand ``render_text`` a
+        multi-line headline, an oversized field, or an empty fact, silently
+        breaking every guarantee this module documents. This is the one
+        validated path into a ``Card``; ``load_card`` uses it too, so the two
+        construction routes cannot drift apart.
+        """
+        card_id = _one_line("id", id, FIELD_LIMITS["id"])
+        if re.fullmatch(r"[a-z][a-z0-9._-]{0,63}", card_id) is None:
+            raise RenderError("id must be a lowercase slug using letters, digits, '.', '_' or '-'")
+        return cls(
+            id=card_id,
+            headline=_one_line("headline", headline, FIELD_LIMITS["headline"]),
+            fact=_one_line("fact", fact, FIELD_LIMITS["fact"]),
+            next=_one_line("next", next, FIELD_LIMITS["next"]),
+        )
+
 
 def _one_line(name: str, value: Any, limit: int) -> str:
     if not isinstance(value, str):
@@ -90,14 +112,8 @@ def load_card(path_value: str) -> Card:
             detail.append("unexpected %s" % ", ".join(extra))
         raise RenderError("card fields must be exactly id, headline, fact, next (%s)" % "; ".join(detail))
 
-    card_id = _one_line("id", data["id"], FIELD_LIMITS["id"])
-    if re.fullmatch(r"[a-z][a-z0-9._-]{0,63}", card_id) is None:
-        raise RenderError("id must be a lowercase slug using letters, digits, '.', '_' or '-'")
-    return Card(
-        id=card_id,
-        headline=_one_line("headline", data["headline"], FIELD_LIMITS["headline"]),
-        fact=_one_line("fact", data["fact"], FIELD_LIMITS["fact"]),
-        next=_one_line("next", data["next"], FIELD_LIMITS["next"]),
+    return Card.strict(
+        id=data["id"], headline=data["headline"], fact=data["fact"], next=data["next"]
     )
 
 
