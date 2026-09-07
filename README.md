@@ -598,7 +598,7 @@ current-session non-enforcement observation, is in
 
 ## Status and limitations
 
-`0.1.2` — early, and honest about it. Six signs, tested over real synthetic git repositories,
+`0.2.0` — early, and honest about it. Six signs, tested over real synthetic git repositories,
 in production use at Hermes Labs. The sign registry is stable and extensible.
 
 Limits worth knowing before you adopt:

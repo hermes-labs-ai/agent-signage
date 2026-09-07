@@ -22,7 +22,7 @@ Exit codes: 0 a card was rendered, or the source correctly licensed no card
 source envelope was malformed or not this contract at all, so nothing could
 be evaluated; 2 the CLI arguments themselves were invalid.
 
-Added in v0.1.3 (unreleased).
+Added in v0.2.0.
 """
 
 from __future__ import annotations
