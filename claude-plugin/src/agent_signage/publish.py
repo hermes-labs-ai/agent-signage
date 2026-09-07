@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
-from . import preflight, render
+from . import contribution, preflight, render
 
 OPS = ("pr-create", "pr-edit")
 
@@ -59,6 +59,7 @@ EXIT_READBACK = 4      # gh succeeded but the published body is not the checked 
 READ_CHUNK = 65536
 _REPO_RE = re.compile(r"[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}")
 _REF_RE = re.compile(r"[A-Za-z0-9._/-]{1,200}")
+_HEAD_OWNER_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?")
 _PR_URL_RE = re.compile(r"https://[^\s]+/pull/\d+")
 _DISCLOSURE_RE = re.compile(
     r"^(?:Co-Authored-By|Signed-off-by|Reviewed-by|Tested-by|Acked-by|Reported-by|"
@@ -89,6 +90,7 @@ class Request:
     preserve: Tuple[str, ...] = ()
     gh: str = "gh"
     timeout: float = 120.0
+    selection: Optional[str] = None
 
 
 @dataclass
@@ -148,6 +150,19 @@ def snapshot(path_value: str) -> Snapshot:
 
 # ---------------------------------------------------------------- validation
 
+def _valid_head(head: str) -> bool:
+    """Accept a plain branch or gh's explicit user:branch fork selector."""
+    if ":" in head:
+        owner, head = head.split(":", 1)
+        if _HEAD_OWNER_RE.fullmatch(owner) is None or "--" in owner:
+            return False
+    if (_REF_RE.fullmatch(head) is None or head.startswith("-")
+            or head.endswith(".") or ".." in head):
+        return False
+    return all(part and not part.startswith(".") and not part.endswith(".lock")
+               for part in head.split("/"))
+
+
 def validate_request(request: Request) -> None:
     if request.op not in OPS:
         raise preflight.PreflightError("operation must be one of %s" % ", ".join(OPS))
@@ -159,6 +174,9 @@ def validate_request(request: Request) -> None:
         raise preflight.PreflightError(
             "--oversight must be given explicitly as one of %s"
             % ", ".join(preflight.OVERSIGHT_LEVELS))
+    if request.selection is not None:
+        if request.selection not in contribution.SELECTIONS or request.kind != "contribution":
+            raise preflight.PreflightError("--selection requires a contribution and autonomous, owner, or unspecified")
     if request.op == "pr-create":
         title = request.title or ""
         if not 1 <= len(title) <= 200 or title.startswith("-"):
@@ -169,10 +187,8 @@ def validate_request(request: Request) -> None:
             _REF_RE.fullmatch(request.base) is None or request.base.startswith("-")
         ):
             raise preflight.PreflightError("--base must be a plain git ref name")
-        if request.head is not None and (
-            _REF_RE.fullmatch(request.head) is None or request.head.startswith("-")
-        ):
-            raise preflight.PreflightError("--head must be a plain git ref name")
+        if request.head is not None and not _valid_head(request.head):
+            raise preflight.PreflightError("--head must be a valid branch or GitHub user:branch")
     else:
         if request.pr is None or not 1 <= request.pr <= 10_000_000:
             raise preflight.PreflightError("--pr must be a positive pull request number")
@@ -199,6 +215,10 @@ def validate_snapshot(snap: Snapshot) -> None:
         raise preflight.PreflightError("snapshot sha256 does not match snapshot data")
 
 
+def _gh_target(request: Request) -> str:
+    return "github.com/" + request.target if request.selection is not None else request.target
+
+
 def publish_argv(request: Request) -> List[str]:
     """argv, never a shell string, and always `--body-file -`.
 
@@ -207,14 +227,14 @@ def publish_argv(request: Request) -> List[str]:
     remove.
     """
     if request.op == "pr-create":
-        argv = [request.gh, "pr", "create", "--repo", request.target,
+        argv = [request.gh, "pr", "create", "--repo", _gh_target(request),
                 "--title", request.title or "", "--body-file", "-"]
         if request.base is not None:
             argv += ["--base", request.base]
         if request.head is not None:
             argv += ["--head", request.head]
         return argv
-    return [request.gh, "pr", "edit", str(request.pr), "--repo", request.target,
+    return [request.gh, "pr", "edit", str(request.pr), "--repo", _gh_target(request),
             "--body-file", "-"]
 
 
@@ -229,7 +249,7 @@ def action_sign(snap: Snapshot, request: Request) -> str:
             "agent-signage is publishing %d checked bytes (sha256 %s) to %s as a %s with "
             "declared oversight %r. The attribution was validated on these exact bytes and "
             "gh receives them on stdin, so nothing re-reads the file."
-            % (len(snap.data), snap.sha256[:12], request.target, request.kind,
+            % (len(snap.data), snap.sha256[:12], _gh_target(request), request.kind,
                request.oversight)
         ),
         next=(
@@ -279,12 +299,13 @@ def publish_snapshot(snap: Snapshot, request: Request, stream=None) -> Result:
     validate_request(request)
     result = Result(exit_code=EXIT_PASS)
 
-    verdict = preflight.check(
-        snap.text,
-        kind=request.kind,
-        oversight=request.oversight,
-        preserve=request.preserve,
-    )
+    def check_body(preserve):
+        if request.selection is not None:
+            return contribution.check(snap.text, request.selection, preserve)
+        return preflight.check(snap.text, kind=request.kind,
+                               oversight=request.oversight, preserve=preserve)
+
+    verdict = check_body(request.preserve)
     if not verdict.ok:
         # Nothing below this point runs. No child is started, so a rejected
         # artifact has no effect of any kind on the remote.
@@ -297,6 +318,24 @@ def publish_snapshot(snap: Snapshot, request: Request, stream=None) -> Result:
         result.exit_code = EXIT_REJECT
         return result
 
+    if request.selection is not None:
+        # Explicit github.com target below and the same gh environment bind this
+        # read-only identity check to the account used for the mutating child.
+        identity = [request.gh, "api", "--hostname", "github.com", "user", "--jq", ".login"]
+        result.gh_invocations.append(identity)
+        try:
+            account = _run(identity, b"", request.timeout)
+        except (OSError, subprocess.SubprocessError):
+            account = None
+        if (account is None or account.returncode != 0
+                or _decode(account.stdout) != contribution.ACCOUNT):
+            print("REJECT  authenticated github.com account must be roli-lpci for this footer; "
+                  "resolve the publishing identity through the contribution decision route. "
+                  "No update was attempted.", file=out)
+            out.flush()
+            result.exit_code = EXIT_REJECT
+            return result
+
     if request.op == "pr-edit":
         # Bind recognizable disclosures to the live body before overwriting it.
         # This read is deliberately after the local attribution check, so a
@@ -304,7 +343,7 @@ def publish_snapshot(snap: Snapshot, request: Request, stream=None) -> Result:
         # any mutating command. `--preserve` remains available for project-
         # specific disclosure lines outside the conventional trailer forms.
         before_argv = [request.gh, "pr", "view", str(request.pr), "--repo",
-                       request.target, "--json", "body"]
+                       _gh_target(request), "--json", "body"]
         result.gh_invocations.append(list(before_argv))
         try:
             before = _run(before_argv, b"", request.timeout)
@@ -326,12 +365,7 @@ def publish_snapshot(snap: Snapshot, request: Request, stream=None) -> Result:
             return result
         live_disclosures = protected_disclosures(previous)
         if live_disclosures:
-            bound = preflight.check(
-                snap.text,
-                kind=request.kind,
-                oversight=request.oversight,
-                preserve=request.preserve + live_disclosures,
-            )
+            bound = check_body(request.preserve + live_disclosures)
             dropped = [reason for reason in bound.reasons
                        if reason.code == "disclosure-dropped"]
             if dropped:
@@ -395,7 +429,7 @@ def publish_snapshot(snap: Snapshot, request: Request, stream=None) -> Result:
         result.exit_code = EXIT_READBACK
         return result
 
-    view = [request.gh, "pr", "view", selector, "--repo", request.target, "--json", "body"]
+    view = [request.gh, "pr", "view", selector, "--repo", _gh_target(request), "--json", "body"]
     result.gh_invocations.append(list(view))
     try:
         readback = _run(view, b"", request.timeout)
@@ -451,7 +485,9 @@ def publish(body_file: str, request: Request, stream=None) -> Result:
 
 def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("op", choices=OPS)
-    parser.add_argument("--body-file", required=True,
+    bodies = parser.add_mutually_exclusive_group(required=True)
+    bodies.add_argument("--body", help="exact inline PR body")
+    bodies.add_argument("--body-file",
                         help="absolute path to the exact artifact to publish")
     parser.add_argument("--target", required=True, metavar="OWNER/REPO")
     parser.add_argument("--kind", required=True, choices=preflight.KINDS,
@@ -460,10 +496,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     # statement this tool will publish about a person, so it is always chosen.
     parser.add_argument("--oversight", required=True, choices=preflight.OVERSIGHT_LEVELS,
                         help="declared by the caller; 'active' is never assumed")
+    parser.add_argument("--selection", choices=contribution.SELECTIONS,
+                        help="enforce the approved contribution footer and personal GitHub account")
     parser.add_argument("--pr", type=int, default=None, help="pull request number, for pr-edit")
     parser.add_argument("--title", default=None, help="title, for pr-create")
     parser.add_argument("--base", default=None, help="base ref, for pr-create")
-    parser.add_argument("--head", default=None, help="head ref, for pr-create")
+    parser.add_argument("--head", default=None, help="head branch or GitHub user:branch, for pr-create")
     parser.add_argument("--preserve", action="append", default=[], metavar="LINE",
                         help="a disclosure line that must survive (repeatable)")
     parser.add_argument("--gh", default="gh", help="path to the gh executable")
@@ -482,8 +520,13 @@ def run_args(args: argparse.Namespace) -> int:
         head=args.head,
         preserve=tuple(args.preserve),
         gh=args.gh,
+        selection=args.selection,
     )
     validate_request(request)
+    if args.body is not None:
+        data = args.body.encode("utf-8")
+        snap = Snapshot("/inline-pr-body", data, args.body, hashlib.sha256(data).hexdigest())
+        return publish_snapshot(snap, request).exit_code
     return publish(args.body_file, request).exit_code
 
 
