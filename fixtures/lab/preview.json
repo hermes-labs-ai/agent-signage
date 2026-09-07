@@ -1,0 +1,14 @@
+{
+  "envelope": "hermes.reliability-lab.result/1",
+  "tool": "agent-kickstart",
+  "toolVersion": "0.2.0",
+  "command": "plan",
+  "mode": "preview",
+  "status": "pass",
+  "inputHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "findings": [],
+  "exitCode": 0,
+  "timestamp": "2026-09-07T00:00:00Z",
+  "gitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "data": {}
+}

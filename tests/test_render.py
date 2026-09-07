@@ -98,3 +98,52 @@ def test_library_rejects_unknown_output_format(tmp_path):
     card = render.load_card(str(write_card(tmp_path)))
     with pytest.raises(render.RenderError, match="format must"):
         render.render(card, "decision")
+
+
+@pytest.mark.parametrize(
+    "changes, message",
+    [
+        ({"headline": "PUBLIC\nRELEASE"}, "control or line-format character"),
+        ({"fact": ""}, "nonempty"),
+        ({"id": "x" * 65}, "exceeds 64"),
+        ({"id": "Not A Slug"}, "lowercase slug"),
+        ({"next": "n" * 701}, "exceeds 700"),
+    ],
+)
+def test_card_strict_rejects_what_load_card_would_reject(changes, message):
+    """Card.strict is the one validated construction path.
+
+    Before this existed, ``Card(...)`` (the bare dataclass constructor) applied
+    no checks at all -- a caller building a card programmatically, rather than
+    reading one from a trusted JSON file, could hand render_text a multi-line
+    headline, an empty fact, or an oversized field and it would render anyway.
+    Any caller assembling a card in memory -- including an adapter that turns
+    another tool's structured result into a card -- must go through this path.
+    """
+    fields = {
+        "id": "release.authorization",
+        "headline": "PUBLIC RELEASE",
+        "fact": "The caller classified this as a public release boundary.",
+        "next": "Check current authorization before continuing.",
+    }
+    fields.update(changes)
+    with pytest.raises(render.RenderError, match=message):
+        render.Card.strict(**fields)
+
+
+def test_card_strict_accepts_the_same_shape_load_card_accepts(tmp_path):
+    from_file = render.load_card(str(write_card(tmp_path)))
+    from_strict = render.Card.strict(
+        id="release.authorization",
+        headline="PUBLIC RELEASE",
+        fact="The caller classified this as a public release boundary.",
+        next="Check current authorization before continuing.",
+    )
+    assert from_file == from_strict
+
+
+def test_bare_card_construction_still_bypasses_validation_this_is_why_strict_exists():
+    """Documents the gap Card.strict closes; not a recommendation to use this path."""
+    card = render.Card(id="x" * 999, headline="a\nb", fact="", next="ok")
+    rendered = render.render_text(card)
+    assert "\n" in rendered

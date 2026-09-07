@@ -8,7 +8,13 @@ once it reaches 1.0. Before 1.0, minor version bumps may include breaking change
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-07
+
 ### Added
+- `agent_signage.lab_card`: turn a Hermes Reliability Lab `hermes.reliability-lab.result/1` envelope into an operational Card, or into nothing. A card is licensed only by `mode: executed` and `status: pass`; anything else -- preview, warn, unknown, fail, or the wrong schema -- returns `None`.
+- `python -m agent_signage.evidence`: CLI/library wrapper that reads a source envelope, renders through `lab_card`, and reports the outcome (card or no card, and why) as an `agent-signage`-authored `hermes.reliability-lab.result/1` envelope of its own. Also refuses a source whose `status` disagrees with its own `findings`.
+- `Card.strict()`: the validated card-construction path `load_card` already used, now exposed for any caller building a card in memory rather than from a JSON file.
+
 - **Publication boundary for GitHub pull requests.** Two pieces with opposite jobs, and the
   first part of this tool allowed to fail closed.
 
@@ -79,6 +85,7 @@ once it reaches 1.0. Before 1.0, minor version bumps may include breaking change
   command is unobservable. `pr-comment` was scope nobody had exercised end to end.
 
 ### Fixed
+- `Card(...)` (the bare dataclass constructor) applied none of the bounds, one-line, or control-character checks `load_card` enforces; a card assembled in memory -- exactly what `lab_card` does -- could carry a multi-line headline or an oversized field straight into `render_text`. `load_card` and `lab_card` now both go through `Card.strict()`, the one validated path.
 - **An attribution block hidden inside a fenced code region or an enclosing HTML comment is now
   rejected.** The first version only asked whether the markers appeared in the text, so a block
   that rendered as a code sample, or did not render at all, satisfied it. Ordinary comments and

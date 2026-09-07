@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-signage"
-version = "0.1.2"
+version = "0.2.0"
 description = "Road signs for coding agents: one true fact at the moment of action, silence otherwise"
 readme = "README.md"
 license = "Apache-2.0"
@@ -63,6 +63,7 @@ packages = ["src/agent_signage"]
 include = [
   "/src",
   "/tests",
+  "/fixtures",
   "/docs",
   "/examples",
   "/scripts",

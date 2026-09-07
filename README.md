@@ -344,6 +344,31 @@ or allow or block an action. Keep cards in a trusted local configuration path. T
 already identifies the boundary owns its facts, authorization checks, enforcement, and fallback.
 This keeps operational guidance timely without turning agent-signage into a policy engine.
 
+## Reliability Lab result envelopes
+
+The same operational-card renderer can turn another Hermes Reliability Lab
+product's own `hermes.reliability-lab.result/1` result into a completion
+card, or into nothing:
+
+```bash
+python3 -m agent_signage.evidence \
+  --source that-product/evidence.json \
+  --id release.checks --headline "GATE PASSED" --next "Continue." \
+  --fact-label "checks passed" --fact-value "2 of 2"
+```
+
+The trust rule: a card is licensed only by an envelope whose `mode` is
+`executed` (a real run, not a preview) and whose `status` is `pass`. A
+`warn`/`unknown`/`fail` status, a preview, a wrong-schema file, or a status
+that disagrees with its own findings all license **no card** — reported as
+such, never guessed past. The caller declares the one measured fact worth
+stating (a precise label and a value already computed from that other
+product's own data); this module does not interpret what a "test count"
+means for a product it did not write, only whether the evidence is
+genuinely completed and the card fits the same bounds every card here does.
+`--source`, `--id`, `--headline`, and `--next` are required; `--fact-label`
+and `--fact-value` are optional and must be given together.
+
 ## Publication boundary
 
 Everything above is passive. The hook cannot block, cannot exit non-zero, and goes quiet on
@@ -573,7 +598,7 @@ current-session non-enforcement observation, is in
 
 ## Status and limitations
 
-`0.1.2` — early, and honest about it. Six signs, tested over real synthetic git repositories,
+`0.2.0` — early, and honest about it. Six signs, tested over real synthetic git repositories,
 in production use at Hermes Labs. The sign registry is stable and extensible.
 
 Limits worth knowing before you adopt:
