@@ -156,12 +156,15 @@ def test_publish_matrix(case, tmp_path, gh, monkeypatch, capsys):
     [c for c in CASES if c["surface"] == "bash-boundary"],
     ids=[c["name"] for c in CASES if c["surface"] == "bash-boundary"],
 )
-def test_bash_boundary_matrix(case):
+def test_bash_boundary_matrix(case, monkeypatch):
+    # Matrix cases run in an external/unknown working context unless they say
+    # otherwise: the detection cases are about the shape, not the checkout.
+    internal = case.get("context") == "internal"
+    monkeypatch.setattr(gate, "_cwd_is_internal", lambda cwd: internal)
     field = case.get("tool_field", "cmd")
-    cwd = "/tmp" if case.get("scope") == "unrelated" else str(ROOT)
     output = gate.run(json.dumps({
         "tool_name": "Bash",
-        "cwd": cwd,
+        "cwd": str(ROOT),
         "tool_input": {field: case["command"]},
     }))
     expected = case["expect"]["deny"]
@@ -552,7 +555,7 @@ def test_attribution_command_emits_a_block_the_checker_accepts():
 def test_gate_subcommand_denies_and_stays_silent_over_stdin():
     denied = _cli("gate", stdin=json.dumps(
         {"tool_name": "Bash", "tool_input": {
-            "command": "gh pr create --repo hermes-labs-ai/agent-signage --title t"}}))
+            "command": "gh pr create --repo someone/upstream --title t"}}))
     assert denied.returncode == 0
     decision = json.loads(denied.stdout)["hookSpecificOutput"]
     assert decision["hookEventName"] == "PreToolUse"
@@ -568,6 +571,8 @@ def test_gate_subcommand_denies_and_stays_silent_over_stdin():
         "",
         json.dumps({"tool_name": "Bash", "tool_input": {"command": 42}}),
         json.dumps({"tool_name": "Bash"}),
+        json.dumps({"tool_name": "Bash", "tool_input": {
+            "command": "gh pr create --repo hermes-labs-ai/agent-signage --title t"}}),
     ):
         quiet = _cli("gate", stdin=payload)
         assert quiet.returncode == 0, payload
@@ -577,7 +582,7 @@ def test_gate_subcommand_denies_and_stays_silent_over_stdin():
 def test_gate_accepts_codex_cmd_shape_and_avoids_search_value_false_positive():
     denied = gate.run(json.dumps(
         {"tool_name": "Bash", "tool_input": {
-            "cmd": "gh pr edit 12 --repo hermes-labs-ai/r --body-file body.md"}}))
+            "cmd": "gh pr edit 12 --repo someone/r --body-file body.md"}}))
     assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     assert gate.guarded_subcommand("gh pr list --search pr --label create") is None
@@ -588,7 +593,7 @@ def test_gate_accepts_codex_cmd_shape_and_avoids_search_value_false_positive():
     multiline = gate.run(json.dumps({
         "tool_name": "Bash",
         "cwd": str(ROOT),
-        "tool_input": {"cmd": "cd /tmp\ngh pr create --repo hermes-labs-ai/r --title t"},
+        "tool_input": {"cmd": "cd /tmp\ngh pr create --repo someone/r --title t"},
     }))
     assert multiline["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert gate.guarded_subcommand("echo `gh pr create --title t`") == "create"
@@ -615,12 +620,17 @@ def test_gate_accepts_codex_cmd_shape_and_avoids_search_value_false_positive():
     "$(command -v gh) pr create --title x",
     "gh_cmd=$(command -v gh); \"$gh_cmd\" pr edit 3 --body x",
 ])
-def test_gate_denies_indirect_publication_from_scoped_repo(monkeypatch, command):
-    monkeypatch.setattr(gate, "_cwd_repo", lambda cwd: "hermes-labs-ai/agent-signage")
+def test_gate_denies_indirect_publication_from_external_context(monkeypatch, command):
+    monkeypatch.setattr(gate, "_cwd_is_internal", lambda cwd: False)
     denied = gate.run(json.dumps({
-        "tool_name": "Bash", "cwd": "/a/hermes/repo", "tool_input": {"cmd": command},
+        "tool_name": "Bash", "cwd": "/a/fork/repo", "tool_input": {"cmd": command},
     }))
     assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # The same indirection is internal work in a clearly internal checkout.
+    monkeypatch.setattr(gate, "_cwd_is_internal", lambda cwd: True)
+    assert gate.run(json.dumps({
+        "tool_name": "Bash", "cwd": "/a/hermes/repo", "tool_input": {"cmd": command},
+    })) is None
 
 
 @pytest.mark.parametrize("command", [
@@ -631,67 +641,95 @@ def test_gate_denies_indirect_publication_from_scoped_repo(monkeypatch, command)
     "echo $(command -v gh) pr create --title x",
 ])
 def test_gate_keeps_nonpublication_indirection_silent(monkeypatch, command):
-    monkeypatch.setattr(gate, "_cwd_repo", lambda cwd: "hermes-labs-ai/agent-signage")
+    monkeypatch.setattr(gate, "_cwd_is_internal", lambda cwd: False)
     quiet = gate.run(json.dumps({
         "tool_name": "Bash", "cwd": "/a/hermes/repo", "tool_input": {"cmd": command},
     }))
     assert quiet is None
 
 
-def test_gate_scope_does_not_force_hermes_attribution_on_unrelated_prs(monkeypatch):
-    monkeypatch.setattr(gate, "_cwd_repo", lambda cwd: "someone/personal")
-    personal = gate.run(json.dumps({
-        "tool_name": "Bash",
-        "cwd": "/a/personal/repo",
-        "tool_input": {"cmd": "gh pr create --repo someone/private-repo --title t"},
+def _gate_decision(command, cwd_internal):
+    output = gate.run(json.dumps({
+        "tool_name": "Bash", "cwd": "/a/checkout", "tool_input": {"cmd": command},
     }))
-    assert personal is None
+    return output["hookSpecificOutput"]["permissionDecision"] if output else None
 
-    metadata = gate.run(json.dumps({
-        "tool_name": "Bash",
-        "cwd": "/a/personal/repo",
-        "tool_input": {"cmd": "gh pr edit 12 --repo hermes-labs-ai/r --add-label bug"},
-    }))
-    assert metadata is None
 
-    monkeypatch.setattr(gate, "_cwd_repo", lambda cwd: "hermes-labs-ai/agent-signage")
-    implicit = gate.run(json.dumps({
-        "tool_name": "Bash",
-        "cwd": "/a/hermes/repo",
-        "tool_input": {"cmd": "gh pr create --title t"},
-    }))
-    assert implicit["hookSpecificOutput"]["permissionDecision"] == "deny"
+@pytest.mark.parametrize("command,cwd_internal,expected", [
+    # An explicit hermes-labs-ai/* target is internal work from any checkout.
+    ("gh pr create --repo hermes-labs-ai/r --title t", False, None),
+    ("gh pr create -R hermes-labs-ai/r --title t", False, None),
+    ("gh pr create --repo=https://github.com/hermes-labs-ai/r.git --title t", False, None),
+    ("gh pr edit 12 -Rhermes-labs-ai/r --body x", False, None),
+    ("GH_REPO=hermes-labs-ai/r gh pr create --title t", False, None),
+    ("gh pr edit https://github.com/hermes-labs-ai/r/pull/3 --body x", False, None),
+    # An explicit non-Hermes target is external, even from an internal checkout.
+    ("gh pr create --repo someone/upstream --title t", True, "deny"),
+    ("gh pr create --repo roli-lpci/personal-fork --title t", True, "deny"),
+    ("gh pr edit 3 -R someone/upstream --body-file b.md", True, "deny"),
+    ("GH_REPO=someone/upstream gh pr create --title t", True, "deny"),
+    ("gh pr edit https://github.com/someone/upstream/pull/3 --body x", True, "deny"),
+    ("gh pr edit https://github.com/someone/upstream/pull/3/files --body x", True, "deny"),
+    ("gh pr edit https://ghe.example.com/hermes-labs-ai/r/pull/3 --body x", True, "deny"),
+    ("gh pr create --repo ghe.example.com/hermes-labs-ai/r --title t", True, "deny"),
+    ("gh pr create --repo hermes-labs-ai/r --repo someone/upstream --title t", True, "deny"),
+    ("unset GH_REPO; gh pr create --title t", True, "deny"),
+    # A value of another option names no target.
+    ("gh pr create --title --repo --body x", True, None),
+    ("gh pr create --title '--repo hermes-labs-ai/r' --body x", False, "deny"),
+    # Absent target: the working checkout decides, conservatively.
+    ("gh pr create --title t", True, None),
+    ("gh pr edit 3 --body x", True, None),
+    ("gh pr create --title t", False, "deny"),
+    ("gh pr edit 3 --body-file b.md", False, "deny"),
+    ("cd ../upstream && gh pr create --title t", True, "deny"),
+    ("GIT_DIR=/x/.git gh pr create --title t", True, "deny"),
+    ("env -C ../upstream gh pr create --title t", True, "deny"),
+    ("sudo -D ../upstream gh pr edit 3 --body x", True, "deny"),
+    ("(pushd ../upstream && gh pr create --title t)", True, "deny"),
+    # Read-only and metadata-only commands are silent everywhere.
+    ("gh pr view 3 --repo someone/upstream", False, None),
+    ("gh pr list", False, None),
+    ("gh pr edit 3 --repo someone/upstream --add-label bug", False, None),
+    ("gh pr edit 3 --add-reviewer alice", False, None),
+    # Untokenisable lines mirror the parsed boundary.
+    ("gh pr create --repo hermes-labs-ai/r --title \"t", False, None),
+    ("gh pr create --repo someone/private --title \"t", True, "deny"),
+    ("gh pr create --title \"t", True, None),
+    ("gh pr create --title \"t", False, "deny"),
+    ("$(command -v gh) pr create --repo hermes-labs-ai/r --title t", False, None),
+    ("$(command -v gh) pr create --repo someone/upstream --title t", True, "deny"),
+])
+def test_gate_enforces_external_targets_and_exempts_internal_ones(
+    monkeypatch, command, cwd_internal, expected
+):
+    monkeypatch.setattr(gate, "_cwd_is_internal", lambda cwd: cwd_internal)
+    assert _gate_decision(command, cwd_internal) == expected
 
-    monkeypatch.setattr(gate, "_cwd_repo", lambda cwd: "roli-lpci/hermes-infra")
-    upstream = gate.run(json.dumps({
-        "tool_name": "Bash",
-        "cwd": "/a/hermes/infra",
-        "tool_input": {"cmd": "gh pr create --repo samvitgersappa/Orbit --title t"},
-    }))
-    assert upstream["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    monkeypatch.setattr(gate, "_cwd_repo", lambda cwd: "someone/personal")
-    unrelated = gate.run(json.dumps({
-        "tool_name": "Bash",
-        "cwd": "/a/personal/repo",
-        "tool_input": {"cmd": "gh pr create --title t"},
-    }))
-    assert unrelated is None
+def _git_checkout(path, remotes):
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    for name, url in remotes:
+        subprocess.run(["git", "-C", str(path), "remote", "add", name, url], check=True)
+    return str(path)
 
-    # Untokenisable lines: the raw fallback honours an explicit scoped target
-    # and stays silent for a personal one, exactly like the parsed path.
-    unparseable_scoped = gate.run(json.dumps({
-        "tool_name": "Bash",
-        "cwd": "/a/personal/repo",
-        "tool_input": {"cmd": "gh pr create --repo hermes-labs-ai/r --title \"t"},
-    }))
-    assert unparseable_scoped["hookSpecificOutput"]["permissionDecision"] == "deny"
-    unparseable_personal = gate.run(json.dumps({
-        "tool_name": "Bash",
-        "cwd": "/a/personal/repo",
-        "tool_input": {"cmd": "gh pr create --repo someone/private --title \"t"},
-    }))
-    assert unparseable_personal is None
+
+def test_cwd_is_internal_only_when_every_remote_is_hermes(tmp_path):
+    internal = _git_checkout(tmp_path / "internal", [
+        ("origin", "git@github.com:hermes-labs-ai/agent-signage.git")])
+    assert gate._cwd_is_internal(internal) is True
+    # gh may pick `upstream` as the base; one internal origin is not enough.
+    fork = _git_checkout(tmp_path / "fork", [
+        ("origin", "https://github.com/hermes-labs-ai/tool.git"),
+        ("upstream", "https://github.com/someone/tool.git")])
+    assert gate._cwd_is_internal(fork) is False
+    personal = _git_checkout(tmp_path / "personal", [
+        ("origin", "https://github.com/roli-lpci/tool.git")])
+    assert gate._cwd_is_internal(personal) is False
+    assert gate._cwd_is_internal(_git_checkout(tmp_path / "bare", [])) is False
+    (tmp_path / "plain").mkdir()
+    assert gate._cwd_is_internal(str(tmp_path / "plain")) is False
+    assert gate._cwd_is_internal(None) is False
 
 
 def test_codex_gate_installer_preserves_existing_hooks_and_is_idempotent(tmp_path):
@@ -825,34 +863,46 @@ def test_edit_pre_read_failure_is_a_child_failure_with_no_update(tmp_path, gh, m
     assert [call["argv"][:2] for call in gh.calls()] == [["pr", "view"]]
 
 
-def test_gate_failure_fallback_honours_an_explicit_scoped_target(monkeypatch, capsys):
+def test_gate_failure_fallback_mirrors_the_external_boundary(monkeypatch, capsys):
     import io
 
     def boom(raw):
         raise RuntimeError("simulated adapter failure")
 
     monkeypatch.setattr(gate, "run", boom)
-    monkeypatch.setattr(gate, "_cwd_repo", lambda cwd: "someone/personal")
+    monkeypatch.setattr(gate, "_cwd_is_internal", lambda cwd: False)
 
     def decision(cmd):
-        payload = json.dumps({"tool_name": "Bash", "cwd": "/a/personal/repo",
+        payload = json.dumps({"tool_name": "Bash", "cwd": "/a/checkout",
                               "tool_input": {"cmd": cmd}})
         monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
         assert gate.main() == 0
         out = capsys.readouterr().out
         return json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out else None
 
-    # `run` would deny an explicit Hermes target from any cwd; the fallback must too.
-    assert decision("gh pr create --repo hermes-labs-ai/r --title t") == "deny"
-    assert decision("make && gh pr create --repo hermes-labs-ai/r --title t") == "deny"
-    assert decision("gh pr edit 3 -R hermes-labs-ai/r --body x") == "deny"
-    # And it stays silent for a personal target, exactly like `run`.
-    assert decision("gh pr create --repo someone/private --title t") is None
-    assert decision("gh pr create --title t") is None
-
-    # A Hermes work context denies the plainest payload, whose command follows a
-    # JSON quote rather than whitespace.
-    monkeypatch.setattr(gate, "_cwd_repo", lambda cwd: "hermes-labs-ai/agent-signage")
+    # An explicit external target is denied from any checkout, like `run`.
+    assert decision("gh pr create --repo someone/upstream --title t") == "deny"
+    assert decision("make && gh pr create --repo someone/upstream --title t") == "deny"
+    assert decision("gh pr edit 3 -R someone/upstream --body x") == "deny"
+    # An absent target outside a clearly internal checkout is unknown: deny.
     assert decision("gh pr create --title t") == "deny"
-    assert decision("gh pr edit 3 --body x") == "deny"
+    # The explicit internal exemption survives the failure path.
+    assert decision("gh pr create --repo hermes-labs-ai/r --title t") is None
+    assert decision("gh pr edit 3 -R hermes-labs-ai/r --body x") is None
+    assert decision("gh pr view 3 --repo someone/upstream") is None
+
+    # A clearly internal checkout exempts the plainest payload, whose command
+    # follows a JSON quote rather than whitespace, but not an external target.
+    monkeypatch.setattr(gate, "_cwd_is_internal", lambda cwd: True)
+    assert decision("gh pr create --title t") is None
+    assert decision("gh pr edit 3 --body x") is None
+    assert decision("gh pr create --repo someone/upstream --title t") == "deny"
     assert decision("gh pr view 3") is None
+
+    # If measuring the checkout itself fails, the context is unknown: deny.
+    def unreadable(cwd):
+        raise OSError("git unavailable")
+
+    monkeypatch.setattr(gate, "_cwd_is_internal", unreadable)
+    assert decision("gh pr create --title t") == "deny"
+    assert decision("gh pr create --repo hermes-labs-ai/r --title t") is None

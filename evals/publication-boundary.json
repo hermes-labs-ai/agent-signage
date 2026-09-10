@@ -376,11 +376,25 @@
       "expect": {"deny": null}
     },
     {
-      "name": "boundary-is-silent-on-a-non-hermes-personal-pr",
-      "why": "The Hermes disclosure policy must not be imposed on unrelated personal work.",
+      "name": "boundary-denies-an-explicit-external-target",
+      "why": "A PR on a non-Hermes repository is an external contribution and carries the attribution.",
       "surface": "bash-boundary",
-      "scope": "unrelated",
-      "command": "gh pr create --repo someone/private-repo --title t",
+      "command": "gh pr create --repo someone/upstream-repo --title t",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-is-silent-on-an-explicit-internal-target",
+      "why": "Internal PRs that target hermes-labs-ai/* are exempt from the external attribution boundary.",
+      "surface": "bash-boundary",
+      "command": "gh pr create --repo hermes-labs-ai/agent-signage --title t",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-is-silent-on-a-bare-pr-in-an-internal-checkout",
+      "why": "Without a named target, a checkout whose remotes are all hermes-labs-ai/* establishes an internal target.",
+      "surface": "bash-boundary",
+      "context": "internal",
+      "command": "gh pr create --title t --body-file b.md",
       "expect": {"deny": null}
     }
   ]

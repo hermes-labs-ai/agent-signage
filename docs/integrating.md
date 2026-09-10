@@ -156,10 +156,10 @@ Supported operations are exactly `pr-create` and `pr-edit`.
 
 ### 2. The Bash adapter is the chokepoint
 
-A separate `PreToolUse` hook, matcher `Bash`, that denies scoped PR creation and body edits:
+A separate `PreToolUse` hook, matcher `Bash`, that denies PR creation and body edits on an external or unresolved target:
 
 ```
-$ echo '{"tool_name":"Bash","tool_input":{"command":"a && gh pr create --repo hermes-labs-ai/example"}}' \
+$ echo '{"tool_name":"Bash","tool_input":{"command":"a && gh pr create --repo someone/upstream"}}' \
     | python3 -m agent_signage gate
 {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"…"}}
 ```
@@ -167,14 +167,14 @@ $ echo '{"tool_name":"Bash","tool_input":{"command":"a && gh pr create --repo he
 It always exits 0; the decision travels in the JSON. It never executes the command under
 judgment. Lexing plus explicit handling covers compound/multiline commands, wrappers, heredoc
 data, and substitutions. The only subprocesses it may start are two bounded, fixed-argv, read-only git measurements
-(`git rev-parse --show-toplevel`, then `git remote get-url origin`) used when scope is not
-explicit.
+(`git rev-parse --show-toplevel`, then `git remote -v`) used when no target is named.
 
-Conservative where it cannot be sure: an untokenisable command that still carries the literal
-shape of a guarded call is denied in a scoped work context. Scope is a `hermes-labs-ai/*`
-source checkout, the Hermes infrastructure source used for upstream contributions, or an
-explicit `hermes-labs-ai/*` target. Non-Hermes source/target pairs and metadata-only PR edits are
-silent, as are malformed JSON, non-Bash tools, `gh pr view`, `gh issue create`, and unrelated commands. Claude Code
+The target decides. Internal PRs that target `hermes-labs-ai/*` are exempt: every explicit
+target (`--repo`/`-R`, a `gh pr edit` PR URL, `GH_REPO`) must be `hermes-labs-ai/*`, or, with
+none named, every remote of the working checkout must be, with no `cd`/`pushd`, wrapper chdir,
+`GIT_DIR`, or `GIT_WORK_TREE` shift in the command. Any other target is external or unknown and denied,
+including from an untokenisable line or the adapter's own failure fallback, which apply the
+same rule to the text. Metadata-only PR edits are silent, as are malformed JSON, non-Bash tools, `gh pr view`, `gh issue create`, and unrelated commands. Claude Code
 supplies `tool_input.command`; Codex unified exec supplies `tool_input.cmd`; both are accepted.
 
 ### 3. Wire the adapter

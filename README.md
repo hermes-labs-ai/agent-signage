@@ -431,11 +431,12 @@ coverage.
 ### The Bash boundary adapter
 
 The publisher only owns the path that goes through it. `scripts/gate.py` is a separate
-`PreToolUse` hook for the **Bash** tool that denies a scoped `gh pr create`/`gh pr new` or a
-body-mutating `gh pr edit` call, and names the publisher instead:
+`PreToolUse` hook for the **Bash** tool that denies a `gh pr create`/`gh pr new` or a
+body-mutating `gh pr edit` call on an external or unresolved target, and names the publisher
+instead:
 
 ```bash
-$ echo '{"tool_name":"Bash","tool_input":{"command":"gh pr create --repo hermes-labs-ai/example --title t"}}' \
+$ echo '{"tool_name":"Bash","tool_input":{"command":"gh pr create --repo someone/upstream --title t"}}' \
     | python3 scripts/gate.py
 {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny", ...}}
 
@@ -445,15 +446,26 @@ $                     # empty: not its business
 
 It never executes the command it judges. The string is lexed as data; physical lines, shell
 continuations, heredoc data, wrappers, control-flow prefixes, and command substitutions are
-handled explicitly. When `--repo` is absent, two bounded read-only git calls with fixed
-argvs (`git rev-parse --show-toplevel`, then `git remote get-url origin`) establish work context. An untokenisable
-guarded shape is denied only when that enclosing work context is in scope.
+handled explicitly. When no target is named, two bounded read-only git calls with fixed
+argvs (`git rev-parse --show-toplevel`, then `git remote -v`) establish work context.
 
-Scope is deliberately narrow. A call is covered when it originates in a `hermes-labs-ai/*`
-checkout, the Hermes infrastructure checkout used for upstream contributions, or explicitly
-targets `hermes-labs-ai/*`. A personal/non-Hermes source targeting a non-Hermes repository is
-silent. Metadata-only `gh pr edit`, read-only/help commands, shell comments and literal heredoc
-data, other `gh` nouns, and unrelated commands are also silent.
+The target decides. The attribution boundary applies to external contributions; internal PRs
+that target `hermes-labs-ai/*` are exempt:
+
+- An explicit target (`--repo`/`-R`, a PR URL passed to `gh pr edit`, or `GH_REPO`) is silent
+  only when every such target is a `hermes-labs-ai/*` GitHub repository. Any other explicit
+  target — an upstream project, a personal fork, another host — is denied.
+- With no explicit target, the call is silent only when the working checkout is clearly
+  internal: every remote is a `hermes-labs-ai/*` GitHub repository, and the command does not
+  `cd`/`pushd`, use a wrapper chdir option (`env -C`, `sudo -D`), or set
+  `GIT_DIR`/`GIT_WORK_TREE` first. Otherwise the target is external or
+  unknown and the call is denied. Name an internal target with `--repo hermes-labs-ai/REPO`
+  when the checkout does not establish it.
+- An untokenisable guarded shape, and the adapter's own failure fallback, read the same
+  explicit targets as text and apply the same rule.
+
+Metadata-only `gh pr edit`, read-only/help commands, shell comments and literal heredoc data,
+other `gh` nouns, and unrelated commands are silent.
 
 For Codex, install it additively with `agent-signage install-publication-gate`; for Claude Code,
 use the equivalent settings entry below. See [Wire the adapter](#wire-the-adapter).
