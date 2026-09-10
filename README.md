@@ -95,6 +95,14 @@ claude plugin marketplace add hermes-labs-ai/agent-signage
 claude plugin install agent-signage@hermes-labs
 ```
 
+Or load it straight from a clone, for that session only, with nothing installed:
+
+```bash
+git clone https://github.com/hermes-labs-ai/agent-signage.git
+cd agent-signage
+claude --plugin-dir claude-plugin
+```
+
 Or add it yourself to `~/.claude/settings.json`:
 
 ```json
