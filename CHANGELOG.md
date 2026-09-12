@@ -8,7 +8,12 @@ once it reaches 1.0. Before 1.0, minor version bumps may include breaking change
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-09-07
+## [0.2.1] - 2026-09-12
+
+Everything below landed after the `v0.2.0` tag (commits `443f25a`..`8162969`, none an ancestor of
+`v0.2.0`). The published 0.2.0 distribution has no `issue-comment-create`, no `--selection
+unspecified`, and no external-target scoping; its changelog entry for issue comments was added
+after release in error and is moved here.
 
 ### Added
 - **Issue comments cross the publication boundary.** A public upstream comment was posted with
@@ -21,6 +26,26 @@ once it reaches 1.0. Before 1.0, minor version bumps may include breaking change
   pre-read the comment and keep its recognized disclosures. The Bash adapter now denies
   `gh issue comment` and `gh pr comment` with a body flag on external or unresolved targets. Raw
   `gh api` writes remain unparsed and are documented as a bypass.
+- `agent-signage publish --selection unspecified`: neutral attribution for proven agent
+  production whose original selection is unknown. `pr-create --head` accepts a cross-fork
+  `owner:branch` head and validates it.
+
+### Changed
+- The Bash adapter scopes PR/comment attribution enforcement to external targets. Targets under
+  `hermes-labs-ai/*` (explicit `--repo`/`-R`, URL, `GH_REPO`, or, with none named, every remote of
+  the checkout with no directory or `GIT_DIR`/`GIT_WORK_TREE` shift) are exempt; anything else is
+  external or unresolved and denied.
+
+### Fixed
+- `GH_REPO` is bound to the guarded `gh` invocation it applies to. A value set through a string
+  the shell re-parses (`bash -c`, `eval`, `env -S`, `$(...)`) or a standalone assignment leaves the
+  target unresolved, so the command is denied instead of falling back to the checkout's remotes.
+- The deny message names the installed `agent-signage` CLI entrypoint rather than an ambient
+  `python3 -m agent_signage`, which could load a different checkout.
+
+## [0.2.0] - 2026-09-07
+
+### Added
 - `agent_signage.lab_card`: turn a Hermes Reliability Lab `hermes.reliability-lab.result/1` envelope into an operational Card, or into nothing. A card is licensed only by `mode: executed` and `status: pass`; anything else -- preview, warn, unknown, fail, or the wrong schema -- returns `None`.
 - `python -m agent_signage.evidence`: CLI/library wrapper that reads a source envelope, renders through `lab_card`, and reports the outcome (card or no card, and why) as an `agent-signage`-authored `hermes.reliability-lab.result/1` envelope of its own. Also refuses a source whose `status` disagrees with its own `findings`.
 - `Card.strict()`: the validated card-construction path `load_card` already used, now exposed for any caller building a card in memory rather than from a JSON file.

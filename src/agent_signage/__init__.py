@@ -4,5 +4,5 @@ One true, checkable fact delivered at the moment an agent acts -- and silence
 the rest of the time.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __all__ = ["__version__"]
