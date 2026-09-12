@@ -8,6 +8,41 @@ once it reaches 1.0. Before 1.0, minor version bumps may include breaking change
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-12
+
+Everything below landed after the `v0.2.0` tag (commits `443f25a`..`8162969`, none an ancestor of
+`v0.2.0`). The published 0.2.0 distribution has no `issue-comment-create`, no `--selection
+unspecified`, and no external-target scoping; its changelog entry for issue comments was added
+after release in error and is moved here.
+
+### Added
+- **Issue comments cross the publication boundary.** A public upstream comment was posted with
+  direct `gh` and only a generic disclosure: the publisher supported only `pr-create`/`pr-edit`
+  and the Bash adapter was silent on `gh issue comment`. `agent-signage publish
+  issue-comment-create --issue N` and `issue-comment-edit --issue N --comment ID` now snapshot the
+  body once, apply the same attribution/selection checks, send the bytes to `gh api` on stdin
+  (`-F body=@-`), and read the comment back by concrete ID, requiring the exact body, the
+  declared issue, and (with `--selection`) `github.com` and the bound comment author. Edits
+  pre-read the comment and keep its recognized disclosures. The Bash adapter now denies
+  `gh issue comment` and `gh pr comment` with a body flag on external or unresolved targets. Raw
+  `gh api` writes remain unparsed and are documented as a bypass.
+- `agent-signage publish --selection unspecified`: neutral attribution for proven agent
+  production whose original selection is unknown. `pr-create --head` accepts a cross-fork
+  `owner:branch` head and validates it.
+
+### Changed
+- The Bash adapter scopes PR/comment attribution enforcement to external targets. Targets under
+  `hermes-labs-ai/*` (explicit `--repo`/`-R`, URL, `GH_REPO`, or, with none named, every remote of
+  the checkout with no directory or `GIT_DIR`/`GIT_WORK_TREE` shift) are exempt; anything else is
+  external or unresolved and denied.
+
+### Fixed
+- `GH_REPO` is bound to the guarded `gh` invocation it applies to. A value set through a string
+  the shell re-parses (`bash -c`, `eval`, `env -S`, `$(...)`) or a standalone assignment leaves the
+  target unresolved, so the command is denied instead of falling back to the checkout's remotes.
+- The deny message names the installed `agent-signage` CLI entrypoint rather than an ambient
+  `python3 -m agent_signage`, which could load a different checkout.
+
 ## [0.2.0] - 2026-09-07
 
 ### Added

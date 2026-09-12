@@ -148,6 +148,33 @@
     },
 
     {
+      "name": "issue-comment-create-publishes-and-verifies-by-comment-id",
+      "why": "An issue comment is public attribution too; it goes through the same snapshot, stdin and exact readback.",
+      "surface": "publish",
+      "op": "issue-comment-create",
+      "block": {"kind": "contribution", "oversight": "none"},
+      "declare": {"kind": "contribution", "oversight": "none"},
+      "expect": {"exit": 0, "gh_calls": 2, "stdin_is_snapshot": true}
+    },
+    {
+      "name": "issue-comment-edit-publishes-and-verifies-by-comment-id",
+      "why": "Replacing a comment body pre-reads the concrete comment ID, then writes and reads back that ID.",
+      "surface": "publish",
+      "op": "issue-comment-edit",
+      "block": {"kind": "review", "oversight": "none"},
+      "declare": {"kind": "review", "oversight": "none"},
+      "expect": {"exit": 0, "gh_calls": 3, "stdin_is_snapshot": true}
+    },
+    {
+      "name": "issue-comment-with-generic-disclosure-never-reaches-gh",
+      "why": "The openai/codex#42311 comment carried only a generic disclosure; the publisher refuses it before any child.",
+      "surface": "publish",
+      "op": "issue-comment-create",
+      "block": null,
+      "declare": {"kind": "contribution", "oversight": "none"},
+      "expect": {"exit": 1, "gh_calls": 0, "codes": ["attribution-missing"]}
+    },
+    {
       "name": "boundary-denies-a-bare-pr-create",
       "surface": "bash-boundary",
       "tool_field": "command",
@@ -376,11 +403,46 @@
       "expect": {"deny": null}
     },
     {
-      "name": "boundary-is-silent-on-a-non-hermes-personal-pr",
-      "why": "The Hermes disclosure policy must not be imposed on unrelated personal work.",
+      "name": "boundary-denies-an-explicit-external-target",
+      "why": "A PR on a non-Hermes repository is an external contribution and carries the attribution.",
       "surface": "bash-boundary",
-      "scope": "unrelated",
-      "command": "gh pr create --repo someone/private-repo --title t",
+      "command": "gh pr create --repo someone/upstream-repo --title t",
+      "expect": {"deny": "create"}
+    },
+    {
+      "name": "boundary-is-silent-on-an-explicit-internal-target",
+      "why": "Internal PRs that target hermes-labs-ai/* are exempt from the external attribution boundary.",
+      "surface": "bash-boundary",
+      "command": "gh pr create --repo hermes-labs-ai/agent-signage --title t",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-is-silent-on-a-bare-pr-in-an-internal-checkout",
+      "why": "Without a named target, a checkout whose remotes are all hermes-labs-ai/* establishes an internal target.",
+      "surface": "bash-boundary",
+      "context": "internal",
+      "command": "gh pr create --title t --body-file b.md",
+      "expect": {"deny": null}
+    },
+    {
+      "name": "boundary-denies-a-direct-external-issue-comment",
+      "why": "The observed openai/codex#42311 path: a direct gh issue comment body on an external target.",
+      "surface": "bash-boundary",
+      "command": "gh issue comment 42311 --repo openai/codex --body-file body.md",
+      "expect": {"deny": "comment"}
+    },
+    {
+      "name": "boundary-denies-a-direct-pr-conversation-comment",
+      "why": "gh pr comment writes the same issue-comment object and is the same bypass.",
+      "surface": "bash-boundary",
+      "command": "gh pr comment 3 --repo someone/upstream --body x",
+      "expect": {"deny": "comment"}
+    },
+    {
+      "name": "boundary-is-silent-on-a-browser-issue-comment",
+      "why": "Without a body flag gh opens a browser or prompt; nothing is published from Bash.",
+      "surface": "bash-boundary",
+      "command": "gh issue comment 3 --repo someone/upstream --web",
       "expect": {"deny": null}
     }
   ]

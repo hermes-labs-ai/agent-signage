@@ -136,10 +136,10 @@ $ echo $?
 | `0` | published, and the body read back byte for byte |
 | `1` | artifact rejected — no mutating `gh` child was started; edit preservation may make one read-only view call |
 | `2` | input rejected — no `gh` child was started |
-| `3` | a `gh` child failed; its status and stderr are reported (a failed `pr-edit` pre-read exits here with no update attempted) |
+| `3` | a `gh` child failed; its status and stderr are reported (a failed `pr-edit`/`issue-comment-edit` pre-read exits here with no update attempted) |
 | `4` | `gh` succeeded but the published body could not be verified |
 
-Call it *instead of* your own `gh pr create` / `gh pr edit`, not before one. That is the whole
+Call it *instead of* your own `gh pr create` / `gh pr edit` / `gh issue comment`, not before one. That is the whole
 difference from the prepare-only design this replaced: a prepared argv handed back to a caller
 is unobservable, and the file can change between the check and the send. Here the body is
 opened once on a bounded `O_NOFOLLOW|O_NONBLOCK` descriptor, checked as a snapshot, and handed to `gh` on
@@ -152,14 +152,22 @@ Before `pr-edit`, the publisher reads the current body and binds recognized disc
 in the pre-read snapshot; it cannot eliminate a concurrent edit between that read and GitHub's
 unconditional update.
 
-Supported operations are exactly `pr-create` and `pr-edit`.
+Issue comments: `issue-comment-create --issue N` and `issue-comment-edit --issue N --comment ID`
+send the snapshot through `gh api ... -F body=@-` (`gh issue comment` cannot address a concrete
+comment ID), take the created ID from the JSON response, and read the comment back by ID. The
+readback must match the body exactly and belong to the declared issue; with `--selection`, every
+call names `github.com` and the comment author must be the bound account. An edit pre-reads the
+comment and binds its disclosure trailers the same way as `pr-edit`.
+
+Supported operations are exactly `pr-create`, `pr-edit`, `issue-comment-create`, and
+`issue-comment-edit`.
 
 ### 2. The Bash adapter is the chokepoint
 
-A separate `PreToolUse` hook, matcher `Bash`, that denies scoped PR creation and body edits:
+A separate `PreToolUse` hook, matcher `Bash`, that denies PR creation, PR body edits, and `gh issue comment`/`gh pr comment` bodies on an external or unresolved target:
 
 ```
-$ echo '{"tool_name":"Bash","tool_input":{"command":"a && gh pr create --repo hermes-labs-ai/example"}}' \
+$ echo '{"tool_name":"Bash","tool_input":{"command":"a && gh pr create --repo someone/upstream"}}' \
     | python3 -m agent_signage gate
 {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"…"}}
 ```
@@ -167,14 +175,14 @@ $ echo '{"tool_name":"Bash","tool_input":{"command":"a && gh pr create --repo he
 It always exits 0; the decision travels in the JSON. It never executes the command under
 judgment. Lexing plus explicit handling covers compound/multiline commands, wrappers, heredoc
 data, and substitutions. The only subprocesses it may start are two bounded, fixed-argv, read-only git measurements
-(`git rev-parse --show-toplevel`, then `git remote get-url origin`) used when scope is not
-explicit.
+(`git rev-parse --show-toplevel`, then `git remote -v`) used when no target is named.
 
-Conservative where it cannot be sure: an untokenisable command that still carries the literal
-shape of a guarded call is denied in a scoped work context. Scope is a `hermes-labs-ai/*`
-source checkout, the Hermes infrastructure source used for upstream contributions, or an
-explicit `hermes-labs-ai/*` target. Non-Hermes source/target pairs and metadata-only PR edits are
-silent, as are malformed JSON, non-Bash tools, `gh pr view`, `gh issue create`, and unrelated commands. Claude Code
+The target decides. Internal PRs that target `hermes-labs-ai/*` are exempt: every explicit
+target (`--repo`/`-R`, a PR or issue URL argument, `GH_REPO`) must be `hermes-labs-ai/*`, or, with
+none named, every remote of the working checkout must be, with no `cd`/`pushd`, wrapper chdir,
+`GIT_DIR`, or `GIT_WORK_TREE` shift in the command. Any other target is external or unknown and denied,
+including from an untokenisable line or the adapter's own failure fallback, which apply the
+same rule to the text. Metadata-only PR edits and comment commands without a body flag are silent, as are malformed JSON, non-Bash tools, `gh pr view`, `gh issue create`, and unrelated commands. Raw `gh api` writes (including `repos/O/R/issues/N/comments`) are not parsed and remain a bypass of this adapter. Claude Code
 supplies `tool_input.command`; Codex unified exec supplies `tool_input.cmd`; both are accepted.
 
 ### 3. Wire the adapter

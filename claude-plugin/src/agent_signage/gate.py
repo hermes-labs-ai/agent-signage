@@ -1,10 +1,12 @@
-"""PreToolUse Bash boundary adapter for scoped PR-body publication.
+"""PreToolUse Bash boundary adapter for external PR-body and comment publication.
 
 The publisher only owns the path that goes through it. An agent with a shell can
 reach `gh` without it, so a checkable verdict is not yet a chokepoint. This
 adapter is the chokepoint for one surface -- the harness's Bash tool -- and it
-does exactly one thing: in a Hermes work context, when a Bash command would
-create a PR or replace its body directly, it denies and names the publisher.
+does exactly one thing: when a Bash command would create a PR, replace its
+body, or post an issue/PR comment body (`gh issue comment`, `gh pr comment`)
+directly on an external or unresolved target, it denies and names the
+publisher. Internal work that targets `hermes-labs-ai/*` is exempt.
 
 Two contracts are deliberately not shared with `hook.py`:
 
@@ -18,27 +20,41 @@ Two contracts are deliberately not shared with `hook.py`:
 
 Nothing executes the command under judgment. The string is lexed and inspected
 as data. Two bounded fixed-argv git measurements (`git rev-parse --show-toplevel`,
-then `git remote get-url origin`) may run to establish work context when the
-command does not name a target.
+then `git remote -v`) may run to establish work context when the command does
+not name a target.
 
-Scope is narrow on purpose. Non-Hermes source/target pairs, metadata-only PR
-edits, `gh pr view`, `gh pr list`, `gh issue create`, `git push`, and unrelated
-commands are silent -- an adapter that denied broadly would guard nothing.
+The target decides. An explicit target (`--repo`/`-R`, a PR or issue URL, or `GH_REPO`)
+is exempt only when every such target is `hermes-labs-ai/*`. Without one, the
+call is exempt only when the working checkout is clearly internal: every
+remote is a `hermes-labs-ai/*` GitHub repository and the command does not
+change directory or git context first. Everything else -- an external target,
+a personal fork, a non-repository, an unreadable remote -- is external or
+unknown and denied. Metadata-only PR edits, comment commands with no body flag
+(`--web`, `--editor`), `gh pr view`, `gh pr list`, `gh issue create`,
+`git push`, and unrelated commands are silent -- an adapter that denied broadly
+would guard nothing. Raw `gh api` requests (for example a POST to
+`repos/O/R/issues/N/comments`) are a known remaining bypass: judging arbitrary
+REST paths, methods and field syntax is a parser this adapter does not attempt.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
+import shutil
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import gitfacts
 
-GUARDED_SUBCOMMANDS = ("create", "edit")
-SCOPED_OWNERS = ("hermes-labs-ai",)
-SCOPED_SOURCE_REPOS = ("roli-lpci/hermes-infra",)
+GUARDED_SUBCOMMANDS = ("create", "edit", "comment")
+# The checked publisher operation each denial names.
+DENY_OPS = {"create": "pr-create", "edit": "pr-edit", "comment": "issue-comment-create"}
+# Owners whose PRs are internal work and exempt from the external attribution
+# boundary. Nothing else is: personal forks and upstream targets are external.
+INTERNAL_OWNERS = ("hermes-labs-ai",)
 
 # Operators that end one command and start another. `shlex` in punctuation mode
 # returns each run of `();<>|&` as its own token, so splitting on these is what
@@ -71,7 +87,7 @@ _SHELL_INTERPRETERS = {"bash", "dash", "fish", "ksh", "sh", "zsh"}
 _DYNAMIC_GUARDED_RE = re.compile(
     r"(?:^|[;&|(\n])\s*[\"']?"
     r"(?:\$\([^\n)]*\)|`[^\n`]*`|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*)"
-    r"[\"']?\s+pr\s+(?P<operation>create|new|edit)\b"
+    r"[\"']?\s+(?P<noun>pr|issue)\s+(?P<operation>create|new|edit|comment)\b"
     r"(?P<tail>[^;&|\n]*)",
 )
 
@@ -82,12 +98,27 @@ _ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _GH_VALUE_OPTIONS = {"--hostname", "--repo", "-R"}
 # The conservative fallback, used only when the line cannot be tokenised.
 _RAW_RE = re.compile(
-    r"(?:^|[\s;&|(`$])gh(?:\.exe)?\b[^;&|\n]*?\bpr\b[^;&|\n]*?\b(?:create|new|edit)\b")
-# Explicit scoped target in a line that could not be tokenised; the fallback
-# must not be narrower than `run`, which honours `--repo` regardless of cwd.
-_RAW_SCOPED_TARGET_RE = re.compile(
-    r"(?:--repo|-R)(?:=|\s+)['\"]?(?:https?://github\.com/)?(?:%s)/"
-    % "|".join(re.escape(owner) for owner in SCOPED_OWNERS), re.IGNORECASE)
+    r"(?:^|[\s;&|(`$])gh(?:\.exe)?\b[^;&|\n]*?"
+    r"(?:\bpr\b[^;&|\n]*?\b(?P<pr>create|new|edit|comment)\b"
+    r"|\bissue\b[^;&|\n]*?\b(?P<issue>comment)\b)")
+# Explicit targets in a line that could not be tokenised. The fallback reads
+# the same three sources as the parsed path so it exempts and denies alike.
+_RAW_REPO_FLAG_RE = re.compile(
+    r"(?:^|[\s;&|(`'\"])(?:--repo(?:=|\s+)|-R(?:=|\s+)?)['\"]?(?P<value>[^\s'\";&|()`]+)")
+# PR and issue URLs: both name the target of `gh pr ...` and `gh issue comment`.
+_PR_URL_RE = re.compile(
+    r"https?://(?P<host>[^/\s'\"]+)/(?P<owner>[^/\s'\"]+)/[^/\s'\"]+/(?:pull|issues)/\d+",
+    re.IGNORECASE)
+# gh reads GH_REPO as the target when `--repo` is absent. A mention without a
+# readable value (`unset GH_REPO`, `export GH_REPO`) leaves the target unknown.
+_GH_REPO_RE = re.compile(r"\bGH_REPO\b(?:=['\"]?(?P<value>[^\s'\";&|()`]*))?")
+# Anything that can move gh away from the payload's cwd before it runs makes
+# the working checkout no evidence of the target.
+# That includes wrapper chdir options (`env -C`, `sudo -D`, `--chdir`); a
+# false match only asks for an explicit `--repo`.
+_CONTEXT_SHIFT_RE = re.compile(
+    r"(?:^|[\s;&|(`'\"])(?:cd|pushd|popd)(?=$|[\s;&|)`'\"])|\bGIT_DIR\b|\bGIT_WORK_TREE\b"
+    r"|(?:^|\s)(?:--chdir|-[CD])")
 _GITHUB_REMOTE_RE = re.compile(
     r"github\.com(?::|/)([^/]+)/([^/]+?)(?:\.git)?$", re.IGNORECASE)
 _BODY_FLAGS = ("--body", "--body-file", "-b", "-F")
@@ -102,26 +133,46 @@ _GH_OPTIONS_WITH_VALUES = {
 }
 
 REASON = (
-    "agent-signage: direct `gh pr {sub}` is not the supported publication path for this "
-    "repository. Publish through the checked boundary instead, which validates the "
-    "attribution on the exact bytes it sends and verifies the published body afterwards:\n"
-    "  python3 -m agent_signage publish {op} --body-file /abs/body.md "
+    "agent-signage: direct {direct} is not the supported publication path for an "
+    "external or unresolved target. Publish through the checked boundary instead, which "
+    "validates the attribution on the exact bytes it sends and verifies the published "
+    "body afterwards:\n"
+    "  {publisher} publish {op} --body-file /abs/body.md "
     "--target OWNER/REPO --kind contribution --oversight none"
     "{extra}\n"
+    "Use this installed CLI entrypoint; an ambient Python module invocation can load "
+    "a different checkout. If the command is missing or lacks this operation, repair "
+    "the CLI installation before retrying. "
     "Choose `--kind review` or `--oversight active` only when those declarations are true. "
     "`--oversight` has no default and is a caller declaration, not a verified fact. "
-    "Read-only gh commands such as `gh pr view` and `gh pr list` are unaffected."
+    "Read-only gh commands such as `gh pr view` and `gh pr list` are unaffected. "
+    "Internal work is exempt only when the target is `hermes-labs-ai/*`: name it with "
+    "`--repo hermes-labs-ai/REPO` when the working checkout does not establish it."
 )
 
 
 def _segments(tokens: List[str]) -> List[List[str]]:
-    out: List[List[str]] = [[]]
+    return [segment for _, segment in _segments_with_operators(tokens)]
+
+
+def _segments_with_operators(
+    tokens: List[str],
+) -> List[Tuple[Optional[str], List[str]]]:
+    """Shell segments paired with the operator immediately before each one."""
+    out: List[Tuple[Optional[str], List[str]]] = []
+    previous_operator: Optional[str] = None
+    current: List[str] = []
     for token in tokens:
         if token in _OPERATORS or (token and all(char in ";&|()<>`$\n" for char in token)):
-            out.append([])
+            if current:
+                out.append((previous_operator, current))
+                current = []
+            previous_operator = token
         else:
-            out[-1].append(token)
-    return [segment for segment in out if segment]
+            current.append(token)
+    if current:
+        out.append((previous_operator, current))
+    return out
 
 
 def _executable(segment: List[str]) -> Optional[int]:
@@ -182,8 +233,9 @@ def _guarded_subcommand(segment: List[str]) -> Optional[str]:
             index += 1
             continue
         break
-    if index >= len(args) or args[index] != "pr":
+    if index >= len(args) or args[index] not in ("pr", "issue"):
         return None
+    noun = args[index]
     index += 1
     while index < len(args) and args[index].startswith("-"):
         if args[index] in _GH_VALUE_OPTIONS and "=" not in args[index]:
@@ -193,20 +245,37 @@ def _guarded_subcommand(segment: List[str]) -> Optional[str]:
     if index >= len(args):
         return None
     operation = args[index]
+    body = _sets_body(args[index + 1:])
+    if noun == "issue":
+        # `gh issue comment` without a body flag prompts, or opens an editor or
+        # browser; only a supplied body is a direct publication.
+        return "comment" if operation == "comment" and body else None
     if operation == "new":
         return "create"
     if operation == "create":
         return "create"
-    if operation == "edit" and any(
+    if operation == "edit" and body:
+        return "edit"
+    if operation == "comment" and body:
+        return "comment"
+    return None
+
+
+def _sets_body(args: List[str]) -> bool:
+    return any(
         token in _BODY_FLAGS
         or token.startswith("--body=")
         or token.startswith("--body-file=")
         or (token.startswith("-b") and token != "-b")
         or (token.startswith("-F") and token != "-F")
-        for token in args[index + 1:]
-    ):
-        return "edit"
-    return None
+        for token in args
+    )
+
+
+def _raw_operation(match: "re.Match[str]") -> str:
+    """The guarded operation an untokenisable `_RAW_RE` match names."""
+    operation = match.group("pr") or match.group("issue")
+    return "create" if operation == "new" else operation
 
 
 def _has_effective_help(args: List[str]) -> bool:
@@ -234,47 +303,215 @@ def _token_segments(command: str) -> Optional[List[List[str]]]:
         return None
 
 
+def _token_segments_with_operators(
+    command: str,
+) -> Optional[List[Tuple[Optional[str], List[str]]]]:
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n`$")
+        lexer.whitespace_split = True
+        lexer.whitespace = " \t\r"
+        lexer.commenters = "#"
+        return _segments_with_operators(list(lexer))
+    except ValueError:
+        return None
+
+
 def _owner_from_repo(value: str) -> Optional[str]:
-    pieces = value.removesuffix(".git").split("/")
-    if len(pieces) < 2:
+    """GitHub owner of `[HOST/]OWNER/REPO` or a github.com URL; None if unreadable.
+
+    A host other than github.com is not an internal target, whatever its owner.
+    """
+    pieces = value.strip("'\"").removesuffix(".git").split("/")
+    if len(pieces) < 2 or not pieces[-1]:
+        return None
+    if len(pieces) >= 3 and pieces[-3].lower() != "github.com":
         return None
     owner = pieces[-2]
     return owner.lower() if re.fullmatch(r"[A-Za-z0-9_.-]+", owner) else None
 
 
-def _explicit_owner(segment: List[str]) -> Tuple[bool, Optional[str]]:
-    """Whether --repo/-R was explicit, and its GitHub owner when parseable."""
-    for index, raw in enumerate(segment):
-        token = raw.lstrip(_LEAD).rstrip(_TRAIL)
+def _segment_targets(segment: List[str]) -> List[Optional[str]]:
+    """Owners named by `--repo`/`-R` or a PR URL argument in one gh call.
+
+    Values of other options are skipped, so `--title --repo x` names no target
+    and `--body https://github.com/o/r/pull/1` is body text, not a target.
+    """
+    start = _executable(segment)
+    args = [t.lstrip(_LEAD).rstrip(_TRAIL) for t in segment[(start or 0) + 1:]]
+    targets: List[Optional[str]] = []
+    index = 0
+    while index < len(args):
+        token = args[index]
         if token in {"--repo", "-R"}:
-            if index + 1 >= len(segment):
-                return True, None
-            return True, _owner_from_repo(segment[index + 1].strip("'\""))
+            targets.append(_owner_from_repo(args[index + 1]) if index + 1 < len(args) else None)
+            index += 2
+            continue
         if token.startswith("--repo="):
-            return True, _owner_from_repo(token.split("=", 1)[1])
-        if token.startswith("-R="):
-            return True, _owner_from_repo(token.split("=", 1)[1])
-        if token.startswith("-R") and len(token) > 2:
-            return True, _owner_from_repo(token[2:])
-    return False, None
+            targets.append(_owner_from_repo(token.split("=", 1)[1]))
+        elif token.startswith("-R") and len(token) > 2:
+            targets.append(_owner_from_repo(token[3:] if token[2] == "=" else token[2:]))
+        elif token in _GH_OPTIONS_WITH_VALUES:
+            index += 2
+            continue
+        else:
+            url = _PR_URL_RE.match(token.strip("'\""))
+            if url:
+                targets.append(_url_owner(url))
+        index += 1
+    return targets
 
 
-def _cwd_repo(cwd: object) -> Optional[str]:
+def _url_owner(match: "re.Match[str]") -> Optional[str]:
+    """Owner of a PR URL; a host other than github.com is never internal."""
+    return match.group("owner").lower() if match.group("host").lower() == "github.com" else None
+
+
+def _gh_repo_targets(command: str, segment: Optional[List[str]]) -> List[Optional[str]]:
+    """GH_REPO targets of one guarded call.
+
+    An inline assignment before that call's program or an unconditional prior
+    export binds a value; the call's own arguments and shell comments are data.
+    Conditional mutations, `unset`, and lines that cannot be tokenised leave
+    the target unknown. So does any mention beyond the inline assignment when
+    the line holds a string the shell parses again.
+    """
+    if segment is None:
+        return [None] if _GH_REPO_RE.search(command) else []
+    start = _executable(segment)
+    if start is None:
+        return []
+
+    cleaned = _strip_heredoc_bodies(_remove_line_continuations(command))
+    parsed = _token_segments_with_operators(cleaned)
+    matches = [] if parsed is None else [
+        index for index, (_, candidate) in enumerate(parsed) if candidate == segment]
+    # A string the shell parses again (`bash -c`, `eval`, `env -S`, `$(...)`)
+    # has no history this gate can replay, and its order against the calls
+    # around it is not provable either. Then only the call's own inline
+    # assignment binds, and any other mention leaves the target unknown.
+    ambiguous = not matches or bool(
+        _substitution_commands(cleaned)
+        + _indirect_command_strings([candidate for _, candidate in parsed]))
+    states: List[Tuple[bool, Optional[str]]] = []
+    assigned = False
+    owner: Optional[str] = None
+    if not ambiguous:
+        for candidate_index, (operator, previous) in enumerate(parsed or []):
+            if candidate_index in matches:
+                states.append((assigned, owner))
+            executable = _executable(previous)
+            if executable is None:
+                # A standalone shell assignment can update a name that was
+                # already exported. Its export state is unknowable here, so
+                # do not fall back to trusting the checkout.
+                if any(token.lstrip(_LEAD).startswith("GH_REPO=")
+                       for token in previous):
+                    assigned = True
+                    owner = None
+                continue
+            name = previous[executable].lstrip(_LEAD).rstrip(_TRAIL).rsplit("/", 1)[-1]
+            args = [token.lstrip(_LEAD).rstrip(_TRAIL)
+                    for token in previous[executable + 1:]]
+            conditional = (operator not in {None, ";", "\n"}
+                           or any(token.lstrip(_LEAD) in _CONTROL_PREFIXES
+                                  for token in previous[:executable]))
+            if name == "unset" and "GH_REPO" in args:
+                assigned = True
+                owner = None
+            elif name == "export":
+                if "-n" in args and "GH_REPO" in args:
+                    assigned = False
+                    owner = None
+                else:
+                    for arg in args:
+                        if arg == "GH_REPO":
+                            assigned = True
+                            owner = None
+                        elif arg.startswith("GH_REPO="):
+                            assigned = True
+                            owner = (None if conditional else
+                                     _owner_from_repo(arg.split("=", 1)[1]))
+    if not states:
+        states = [(False, None)]
+    index = 0
+    while index < start:
+        token = segment[index].lstrip(_LEAD)
+        if token in _WRAPPERS:
+            wrapper = token
+            index += 1
+            while index < start:
+                option = segment[index].lstrip(_LEAD)
+                if option == "--":
+                    index += 1
+                    break
+                if not option.startswith("-") or option == "-":
+                    break
+                name = option.split("=", 1)[0]
+                if wrapper == "env" and name in {"-i", "--ignore-environment"}:
+                    states = [(False, None) for _ in states]
+                if wrapper == "env" and name in {"-u", "--unset"}:
+                    unset = (option.split("=", 1)[1] if "=" in option
+                             else segment[index + 1] if index + 1 < start else "")
+                    if unset == "GH_REPO":
+                        states = [(False, None) for _ in states]
+                elif wrapper == "env" and option.startswith("-u"):
+                    if option[2:] == "GH_REPO":
+                        states = [(False, None) for _ in states]
+                index += 1
+                if (name in _WRAPPER_VALUE_OPTIONS.get(wrapper, set())
+                        and "=" not in option and index < start):
+                    index += 1
+            continue
+        if token.startswith("GH_REPO="):
+            inline_owner = _owner_from_repo(token.split("=", 1)[1])
+            states = [(True, inline_owner) for _ in states]
+        index += 1
+    targets = ([state_owner if state_assigned else None
+                for state_assigned, state_owner in states]
+               if any(state_assigned for state_assigned, _ in states) else [])
+    if ambiguous and (len(_GH_REPO_RE.findall(command))
+                      > sum(len(_GH_REPO_RE.findall(token)) for token in segment)):
+        targets.append(None)
+    return targets
+
+
+def _raw_targets(command: str) -> List[Optional[str]]:
+    """The explicit targets `_segment_targets` would read, found as text."""
+    return ([_owner_from_repo(match.group("value"))
+             for match in _RAW_REPO_FLAG_RE.finditer(command)]
+            + [_url_owner(match) for match in _PR_URL_RE.finditer(command)])
+
+
+def _cwd_is_internal(cwd: object) -> bool:
+    """True only when every remote of the cwd checkout is `hermes-labs-ai/*`.
+
+    gh picks its base repository among the remotes (an `upstream` often wins),
+    so one internal `origin` beside an external remote is not clearly internal.
+    """
     if not isinstance(cwd, str) or not cwd:
-        return None
+        return False
     root = gitfacts.repo_root(cwd)
     if root is None:
-        return None
-    remote = gitfacts.origin_url(root)
-    match = _GITHUB_REMOTE_RE.search(remote or "")
-    return "%s/%s" % (match.group(1).lower(), match.group(2).lower()) if match else None
-
-
-def _repo_is_scoped(repo: Optional[str]) -> bool:
-    if repo is None:
         return False
-    owner = repo.split("/", 1)[0]
-    return owner in SCOPED_OWNERS or repo in SCOPED_SOURCE_REPOS
+    remotes = gitfacts._git(root, "remote", "-v")
+    urls = [fields[1] for fields in (line.split() for line in (remotes or "").splitlines())
+            if len(fields) >= 2]
+    if not urls:
+        return False
+    for url in urls:
+        match = _GITHUB_REMOTE_RE.search(url)
+        if match is None or match.group(1).lower() not in INTERNAL_OWNERS:
+            return False
+    return True
+
+
+def _is_internal(targets: List[Optional[str]], command: str, cwd_internal: bool,
+                 segment: Optional[List[str]] = None) -> bool:
+    """The one exemption rule shared by the parsed, raw, and failure paths."""
+    targets = targets + _gh_repo_targets(command, segment)
+    if targets:
+        return all(owner in INTERNAL_OWNERS for owner in targets)
+    return cwd_internal and not _CONTEXT_SHIFT_RE.search(command)
 
 
 def _guarded_segments(
@@ -289,8 +526,7 @@ def _guarded_segments(
         match = _RAW_RE.search(command)
         if match is None:
             return []
-        matched = match.group(0)
-        return [("edit" if re.search(r"\bedit\b", matched) else "create", None)]
+        return [(_raw_operation(match), None)]
     guarded = [(found, segment) for segment in segments
                for found in [_guarded_subcommand(segment)] if found is not None]
     if depth >= 4:
@@ -299,7 +535,7 @@ def _guarded_segments(
         guarded.extend(_guarded_segments(nested, depth + 1))
     for match in _DYNAMIC_GUARDED_RE.finditer(command):
         operation = match.group("operation")
-        candidate = "gh pr %s%s" % (operation, match.group("tail"))
+        candidate = "gh %s %s%s" % (match.group("noun"), operation, match.group("tail"))
         dynamic = _guarded_subcommand(_token_segments(candidate)[0])
         if dynamic is not None:
             guarded.append((dynamic, None))
@@ -509,13 +745,28 @@ def guarded_subcommand(command: str) -> Optional[str]:
 
 
 def deny_output(subcommand: str) -> Dict[str, Any]:
-    op = "pr-%s" % subcommand
-    extra = " --title 'feat: ...'" if subcommand == "create" else " --pr N"
+    # The gate's Python and the caller's python3 can resolve different installs
+    # (including an unavailable editable checkout). Name the installed console
+    # script, retaining its interpreter binding. Never import or execute it here.
+    executable = shutil.which("agent-signage")
+    publisher = shlex.quote(os.path.abspath(executable)) if executable else "agent-signage"
+    op = DENY_OPS[subcommand]
+    direct = {"create": "`gh pr create`", "edit": "`gh pr edit`",
+              "comment": "`gh issue comment` or `gh pr comment`"}[subcommand]
+    extra = {
+        "create": " --title 'feat: ...'",
+        "edit": " --pr N",
+        "comment": " --issue N\n"
+                   "To replace an existing comment body, use `publish issue-comment-edit "
+                   "--issue N --comment COMMENT_ID`, which keeps its recognized disclosures.",
+    }[subcommand]
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": REASON.format(sub=subcommand, op=op, extra=extra),
+            "permissionDecisionReason": REASON.format(
+                direct=direct, op=op, extra=extra, publisher=publisher,
+            ),
         }
     }
 
@@ -543,17 +794,15 @@ def run(raw: str) -> Optional[Dict[str, Any]]:
     if not isinstance(command, str):
         return None
 
-    cwd_repo = _cwd_repo(payload.get("cwd"))
-    for subcommand, segment in _guarded_segments(command):
-        if segment is None:
-            # The line could not be tokenised. An explicit scoped target is
-            # still recognisable as text, and the fallback must not be
-            # narrower than the parsed path.
-            target_is_scoped = bool(_RAW_SCOPED_TARGET_RE.search(command))
-        else:
-            explicit, owner = _explicit_owner(segment)
-            target_is_scoped = explicit and owner in SCOPED_OWNERS
-        if _repo_is_scoped(cwd_repo) or target_is_scoped:
+    guarded = _guarded_segments(command)
+    if not guarded:
+        return None
+    cwd_internal = _cwd_is_internal(payload.get("cwd"))
+    for subcommand, segment in guarded:
+        # An untokenisable line still shows its explicit targets as text; the
+        # raw reading applies the same exemption as the parsed one.
+        targets = _raw_targets(command) if segment is None else _segment_targets(segment)
+        if not _is_internal(targets, command, cwd_internal, segment):
             return deny_output(subcommand)
     return None
 
@@ -576,7 +825,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # raw JSON the command follows a quote, which `_RAW_RE` does not treat
         # as a command boundary.
         text = raw or ""
-        repo = None
+        cwd_internal = False
         try:
             payload = json.loads(raw)
             if isinstance(payload, dict):
@@ -587,13 +836,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                         command = tool_input.get("cmd")
                     if isinstance(command, str):
                         text = command
-                repo = _cwd_repo(payload.get("cwd"))
+                cwd_internal = _cwd_is_internal(payload.get("cwd"))
         except Exception:
             pass
         match = _RAW_RE.search(text)
-        scoped = _repo_is_scoped(repo) or bool(_RAW_SCOPED_TARGET_RE.search(text))
-        out = deny_output("edit" if match and "edit" in match.group(0) else "create") \
-            if match and scoped else None
+        try:
+            internal = _is_internal(_raw_targets(text), text, cwd_internal)
+        except Exception:
+            internal = False
+        out = deny_output(_raw_operation(match)) if match and not internal else None
     if out is not None:
         try:
             sys.stdout.write(json.dumps(out))
