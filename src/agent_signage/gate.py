@@ -40,8 +40,10 @@ REST paths, methods and field syntax is a parser this adapter does not attempt.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
+import shutil
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -135,9 +137,12 @@ REASON = (
     "external or unresolved target. Publish through the checked boundary instead, which "
     "validates the attribution on the exact bytes it sends and verifies the published "
     "body afterwards:\n"
-    "  python3 -m agent_signage publish {op} --body-file /abs/body.md "
+    "  {publisher} publish {op} --body-file /abs/body.md "
     "--target OWNER/REPO --kind contribution --oversight none"
     "{extra}\n"
+    "Use this installed CLI entrypoint; an ambient Python module invocation can load "
+    "a different checkout. If the command is missing or lacks this operation, repair "
+    "the CLI installation before retrying. "
     "Choose `--kind review` or `--oversight active` only when those declarations are true. "
     "`--oversight` has no default and is a caller declaration, not a verified fact. "
     "Read-only gh commands such as `gh pr view` and `gh pr list` are unaffected. "
@@ -740,6 +745,11 @@ def guarded_subcommand(command: str) -> Optional[str]:
 
 
 def deny_output(subcommand: str) -> Dict[str, Any]:
+    # The gate's Python and the caller's python3 can resolve different installs
+    # (including an unavailable editable checkout). Name the installed console
+    # script, retaining its interpreter binding. Never import or execute it here.
+    executable = shutil.which("agent-signage")
+    publisher = shlex.quote(os.path.abspath(executable)) if executable else "agent-signage"
     op = DENY_OPS[subcommand]
     direct = {"create": "`gh pr create`", "edit": "`gh pr edit`",
               "comment": "`gh issue comment` or `gh pr comment`"}[subcommand]
@@ -754,7 +764,9 @@ def deny_output(subcommand: str) -> Dict[str, Any]:
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": REASON.format(direct=direct, op=op, extra=extra),
+            "permissionDecisionReason": REASON.format(
+                direct=direct, op=op, extra=extra, publisher=publisher,
+            ),
         }
     }
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -197,6 +198,48 @@ def test_matrix_exercises_both_surfaces_in_both_directions():
     assert len(published) >= 3 and len(stopped) >= 5
     assert any(c["expect"].get("deny") for c in CASES)
     assert any(c["expect"].get("deny") is None for c in CASES if c["surface"] == "bash-boundary")
+
+
+@pytest.mark.parametrize("operation", ("create", "edit", "comment"))
+def test_denial_uses_installed_publisher_even_when_ambient_python_is_broken(
+    tmp_path, monkeypatch, operation,
+):
+    # Reproduce the host's split runtime without importing its unavailable
+    # editable checkout. The installed CLI has its own interpreter; python3
+    # from the caller's PATH must never be the recovery command.
+    bin_dir = tmp_path / "installed tools"
+    bin_dir.mkdir()
+    cli = bin_dir / "agent-signage"
+    cli.write_text(
+        "#!%s\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n" % sys.executable,
+        encoding="utf-8",
+    )
+    cli.chmod(0o755)
+    ambient = bin_dir / "python3"
+    ambient.write_text("#!/bin/sh\nexit 65\n", encoding="utf-8")
+    ambient.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    reason = gate.deny_output(operation)["hookSpecificOutput"]["permissionDecisionReason"]
+    command = next(line.strip() for line in reason.splitlines() if line.startswith("  "))
+    argv = shlex.split(command)
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=2, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert argv[0] == str(cli)
+    assert json.loads(result.stdout)[:2] == ["publish", gate.DENY_OPS[operation]]
+
+
+def test_denial_without_installed_cli_does_not_fall_back_to_ambient_python(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    reason = gate.deny_output("create")["hookSpecificOutput"]["permissionDecisionReason"]
+    command = next(line.strip() for line in reason.splitlines() if line.startswith("  "))
+    assert shlex.split(command)[:3] == ["agent-signage", "publish", "pr-create"]
+    assert "repair the CLI installation" in reason
+    with pytest.raises(FileNotFoundError):
+        subprocess.run(shlex.split(command), timeout=2, check=False)
 
 
 # ------------------------------------------------------- the ordered contract
@@ -748,7 +791,7 @@ def test_gate_subcommand_denies_and_stays_silent_over_stdin():
     decision = json.loads(denied.stdout)["hookSpecificOutput"]
     assert decision["hookEventName"] == "PreToolUse"
     assert decision["permissionDecision"] == "deny"
-    assert "agent_signage publish pr-create" in decision["permissionDecisionReason"]
+    assert " publish pr-create" in decision["permissionDecisionReason"]
     assert "|" not in decision["permissionDecisionReason"]
 
     for payload in (
