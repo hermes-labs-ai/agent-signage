@@ -367,7 +367,8 @@ def _gh_repo_targets(command: str, segment: Optional[List[str]]) -> List[Optiona
     An inline assignment before that call's program or an unconditional prior
     export binds a value; the call's own arguments and shell comments are data.
     Conditional mutations, `unset`, and lines that cannot be tokenised leave
-    the target unknown.
+    the target unknown. So does any mention beyond the inline assignment when
+    the line holds a string the shell parses again.
     """
     if segment is None:
         return [None] if _GH_REPO_RE.search(command) else []
@@ -375,14 +376,21 @@ def _gh_repo_targets(command: str, segment: Optional[List[str]]) -> List[Optiona
     if start is None:
         return []
 
-    parsed = _token_segments_with_operators(
-        _strip_heredoc_bodies(_remove_line_continuations(command)))
+    cleaned = _strip_heredoc_bodies(_remove_line_continuations(command))
+    parsed = _token_segments_with_operators(cleaned)
     matches = [] if parsed is None else [
         index for index, (_, candidate) in enumerate(parsed) if candidate == segment]
+    # A string the shell parses again (`bash -c`, `eval`, `env -S`, `$(...)`)
+    # has no history this gate can replay, and its order against the calls
+    # around it is not provable either. Then only the call's own inline
+    # assignment binds, and any other mention leaves the target unknown.
+    ambiguous = not matches or bool(
+        _substitution_commands(cleaned)
+        + _indirect_command_strings([candidate for _, candidate in parsed]))
     states: List[Tuple[bool, Optional[str]]] = []
     assigned = False
     owner: Optional[str] = None
-    if matches:
+    if not ambiguous:
         for candidate_index, (operator, previous) in enumerate(parsed or []):
             if candidate_index in matches:
                 states.append((assigned, owner))
@@ -453,10 +461,13 @@ def _gh_repo_targets(command: str, segment: Optional[List[str]]) -> List[Optiona
             inline_owner = _owner_from_repo(token.split("=", 1)[1])
             states = [(True, inline_owner) for _ in states]
         index += 1
-    if not any(state_assigned for state_assigned, _ in states):
-        return []
-    return [state_owner if state_assigned else None
-            for state_assigned, state_owner in states]
+    targets = ([state_owner if state_assigned else None
+                for state_assigned, state_owner in states]
+               if any(state_assigned for state_assigned, _ in states) else [])
+    if ambiguous and (len(_GH_REPO_RE.findall(command))
+                      > sum(len(_GH_REPO_RE.findall(token)) for token in segment)):
+        targets.append(None)
+    return targets
 
 
 def _raw_targets(command: str) -> List[Optional[str]]:

@@ -916,6 +916,19 @@ def _gate_decision(command, cwd_internal):
      False, "deny"),
     ("GH_REPO=someone/upstream; gh issue comment 3 --body x", True, "deny"),
     ("export -n GH_REPO; gh issue comment 3 --body x", True, None),
+    # A re-parsed string (`bash -c`, `eval`, `env -S`) has no replayable
+    # history: its own inline assignment binds, any other mention is unknown.
+    ("bash -c 'GH_REPO=someone/upstream gh issue comment 3 --body x'", True, "deny"),
+    ("bash -c 'GH_REPO=hermes-labs-ai/r gh issue comment 3 --body x'", False, None),
+    ("export GH_REPO=someone/upstream; bash -c 'gh issue comment 3 --body x'", True, "deny"),
+    ("export GH_REPO=hermes-labs-ai/r; bash -c 'gh issue comment 3 --body x'", True, "deny"),
+    ("GH_REPO=hermes-labs-ai/r bash -c 'gh issue comment 3 --body x'", True, "deny"),
+    ("eval 'GH_REPO=someone/upstream gh issue comment 3 --body x'", True, "deny"),
+    ("export GH_REPO=someone/upstream; eval 'gh issue comment 3 --body x'", True, "deny"),
+    ("env -S 'GH_REPO=someone/upstream gh issue comment 3 --body x'", True, "deny"),
+    ("export GH_REPO=someone/upstream; env -S 'gh issue comment 3 --body x'", True, "deny"),
+    ("export GH_REPO=hermes-labs-ai/r; gh issue comment 3 --body x; "
+     "export GH_REPO=someone/upstream; bash -c 'gh issue comment 3 --body x'", True, "deny"),
     ("make && gh issue comment 3 --repo someone/upstream --body \"x", True, "deny"),
     ("gh issue comment 3 --repo hermes-labs-ai/r --body x", False, None),
     ("gh issue comment https://github.com/hermes-labs-ai/r/issues/3 --body x", False, None),
