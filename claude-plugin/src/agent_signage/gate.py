@@ -147,13 +147,27 @@ REASON = (
 
 
 def _segments(tokens: List[str]) -> List[List[str]]:
-    out: List[List[str]] = [[]]
+    return [segment for _, segment in _segments_with_operators(tokens)]
+
+
+def _segments_with_operators(
+    tokens: List[str],
+) -> List[Tuple[Optional[str], List[str]]]:
+    """Shell segments paired with the operator immediately before each one."""
+    out: List[Tuple[Optional[str], List[str]]] = []
+    previous_operator: Optional[str] = None
+    current: List[str] = []
     for token in tokens:
         if token in _OPERATORS or (token and all(char in ";&|()<>`$\n" for char in token)):
-            out.append([])
+            if current:
+                out.append((previous_operator, current))
+                current = []
+            previous_operator = token
         else:
-            out[-1].append(token)
-    return [segment for segment in out if segment]
+            current.append(token)
+    if current:
+        out.append((previous_operator, current))
+    return out
 
 
 def _executable(segment: List[str]) -> Optional[int]:
@@ -284,6 +298,19 @@ def _token_segments(command: str) -> Optional[List[List[str]]]:
         return None
 
 
+def _token_segments_with_operators(
+    command: str,
+) -> Optional[List[Tuple[Optional[str], List[str]]]]:
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n`$")
+        lexer.whitespace_split = True
+        lexer.whitespace = " \t\r"
+        lexer.commenters = "#"
+        return _segments_with_operators(list(lexer))
+    except ValueError:
+        return None
+
+
 def _owner_from_repo(value: str) -> Optional[str]:
     """GitHub owner of `[HOST/]OWNER/REPO` or a github.com URL; None if unreadable.
 
@@ -334,9 +361,102 @@ def _url_owner(match: "re.Match[str]") -> Optional[str]:
     return match.group("owner").lower() if match.group("host").lower() == "github.com" else None
 
 
-def _gh_repo_targets(command: str) -> List[Optional[str]]:
-    return [_owner_from_repo(match.group("value")) if match.group("value") else None
-            for match in _GH_REPO_RE.finditer(command)]
+def _gh_repo_targets(command: str, segment: Optional[List[str]]) -> List[Optional[str]]:
+    """GH_REPO targets of one guarded call.
+
+    An inline assignment before that call's program or an unconditional prior
+    export binds a value; the call's own arguments and shell comments are data.
+    Conditional mutations, `unset`, and lines that cannot be tokenised leave
+    the target unknown.
+    """
+    if segment is None:
+        return [None] if _GH_REPO_RE.search(command) else []
+    start = _executable(segment)
+    if start is None:
+        return []
+
+    parsed = _token_segments_with_operators(
+        _strip_heredoc_bodies(_remove_line_continuations(command)))
+    matches = [] if parsed is None else [
+        index for index, (_, candidate) in enumerate(parsed) if candidate == segment]
+    states: List[Tuple[bool, Optional[str]]] = []
+    assigned = False
+    owner: Optional[str] = None
+    if matches:
+        for candidate_index, (operator, previous) in enumerate(parsed or []):
+            if candidate_index in matches:
+                states.append((assigned, owner))
+            executable = _executable(previous)
+            if executable is None:
+                # A standalone shell assignment can update a name that was
+                # already exported. Its export state is unknowable here, so
+                # do not fall back to trusting the checkout.
+                if any(token.lstrip(_LEAD).startswith("GH_REPO=")
+                       for token in previous):
+                    assigned = True
+                    owner = None
+                continue
+            name = previous[executable].lstrip(_LEAD).rstrip(_TRAIL).rsplit("/", 1)[-1]
+            args = [token.lstrip(_LEAD).rstrip(_TRAIL)
+                    for token in previous[executable + 1:]]
+            conditional = (operator not in {None, ";", "\n"}
+                           or any(token.lstrip(_LEAD) in _CONTROL_PREFIXES
+                                  for token in previous[:executable]))
+            if name == "unset" and "GH_REPO" in args:
+                assigned = True
+                owner = None
+            elif name == "export":
+                if "-n" in args and "GH_REPO" in args:
+                    assigned = False
+                    owner = None
+                else:
+                    for arg in args:
+                        if arg == "GH_REPO":
+                            assigned = True
+                            owner = None
+                        elif arg.startswith("GH_REPO="):
+                            assigned = True
+                            owner = (None if conditional else
+                                     _owner_from_repo(arg.split("=", 1)[1]))
+    if not states:
+        states = [(False, None)]
+    index = 0
+    while index < start:
+        token = segment[index].lstrip(_LEAD)
+        if token in _WRAPPERS:
+            wrapper = token
+            index += 1
+            while index < start:
+                option = segment[index].lstrip(_LEAD)
+                if option == "--":
+                    index += 1
+                    break
+                if not option.startswith("-") or option == "-":
+                    break
+                name = option.split("=", 1)[0]
+                if wrapper == "env" and name in {"-i", "--ignore-environment"}:
+                    states = [(False, None) for _ in states]
+                if wrapper == "env" and name in {"-u", "--unset"}:
+                    unset = (option.split("=", 1)[1] if "=" in option
+                             else segment[index + 1] if index + 1 < start else "")
+                    if unset == "GH_REPO":
+                        states = [(False, None) for _ in states]
+                elif wrapper == "env" and option.startswith("-u"):
+                    if option[2:] == "GH_REPO":
+                        states = [(False, None) for _ in states]
+                index += 1
+                if (name in _WRAPPER_VALUE_OPTIONS.get(wrapper, set())
+                        and "=" not in option and index < start):
+                    index += 1
+            continue
+        if token.startswith("GH_REPO="):
+            inline_owner = _owner_from_repo(token.split("=", 1)[1])
+            states = [(True, inline_owner) for _ in states]
+        index += 1
+    if not any(state_assigned for state_assigned, _ in states):
+        return []
+    return [state_owner if state_assigned else None
+            for state_assigned, state_owner in states]
 
 
 def _raw_targets(command: str) -> List[Optional[str]]:
@@ -369,9 +489,10 @@ def _cwd_is_internal(cwd: object) -> bool:
     return True
 
 
-def _is_internal(targets: List[Optional[str]], command: str, cwd_internal: bool) -> bool:
+def _is_internal(targets: List[Optional[str]], command: str, cwd_internal: bool,
+                 segment: Optional[List[str]] = None) -> bool:
     """The one exemption rule shared by the parsed, raw, and failure paths."""
-    targets = targets + _gh_repo_targets(command)
+    targets = targets + _gh_repo_targets(command, segment)
     if targets:
         return all(owner in INTERNAL_OWNERS for owner in targets)
     return cwd_internal and not _CONTEXT_SHIFT_RE.search(command)
@@ -658,7 +779,7 @@ def run(raw: str) -> Optional[Dict[str, Any]]:
         # An untokenisable line still shows its explicit targets as text; the
         # raw reading applies the same exemption as the parsed one.
         targets = _raw_targets(command) if segment is None else _segment_targets(segment)
-        if not _is_internal(targets, command, cwd_internal):
+        if not _is_internal(targets, command, cwd_internal, segment):
             return deny_output(subcommand)
     return None
 

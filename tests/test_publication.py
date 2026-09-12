@@ -895,6 +895,27 @@ def _gate_decision(command, cwd_internal):
     ("gh issue comment https://github.com/someone/upstream/issues/3 --body x", True, "deny"),
     ("gh pr comment 3 --repo someone/upstream --body x", True, "deny"),
     ("GH_REPO=someone/upstream gh issue comment 3 --body x", True, "deny"),
+    # GH_REPO binds only as an inline assignment of the guarded call itself.
+    ("GH_REPO=hermes-labs-ai/r gh issue comment 3 --body x", False, None),
+    ("gh issue comment 3 --body 'GH_REPO=hermes-labs-ai/r'", False, "deny"),
+    ("gh issue comment 3 --body x # GH_REPO=hermes-labs-ai/r", False, "deny"),
+    ("GH_REPO=hermes-labs-ai/r echo unrelated; gh issue comment 3 --body x", False, "deny"),
+    ("sudo -u GH_REPO=hermes-labs-ai/r gh issue comment 3 --body x", False, "deny"),
+    ("GH_REPO=hermes-labs-ai/r env -i gh issue comment 3 --body x", False, "deny"),
+    ("GH_REPO=hermes-labs-ai/r env -uGH_REPO gh issue comment 3 --body x",
+     False, "deny"),
+    ("GH_REPO=someone/upstream echo unrelated; gh issue comment 3 "
+     "--repo hermes-labs-ai/r --body x", False, None),
+    ("export GH_REPO=someone/upstream; gh issue comment 3 --body x", True, "deny"),
+    ("export GH_REPO=hermes-labs-ai/r; gh issue comment 3 --body x", False, None),
+    ("export GH_REPO=hermes-labs-ai/r; gh issue comment 3 --body x; "
+     "gh issue comment 3 --body x", False, None),
+    ("export GH_REPO=someone/upstream; gh issue comment 3 --body x; "
+     "gh issue comment 3 --body x", True, "deny"),
+    ("false && export GH_REPO=hermes-labs-ai/r; gh issue comment 3 --body x",
+     False, "deny"),
+    ("GH_REPO=someone/upstream; gh issue comment 3 --body x", True, "deny"),
+    ("export -n GH_REPO; gh issue comment 3 --body x", True, None),
     ("make && gh issue comment 3 --repo someone/upstream --body \"x", True, "deny"),
     ("gh issue comment 3 --repo hermes-labs-ai/r --body x", False, None),
     ("gh issue comment https://github.com/hermes-labs-ai/r/issues/3 --body x", False, None),
