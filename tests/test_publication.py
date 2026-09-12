@@ -43,7 +43,8 @@ def gh(tmp_path, monkeypatch):
     store = tmp_path / "published.txt"
     monkeypatch.setenv("FAKE_GH_STORE", str(store))
     for name in ("FAKE_GH_FAIL", "FAKE_GH_NO_URL", "FAKE_GH_VIEW_BODY", "FAKE_GH_VIEW_FAIL",
-                 "FAKE_GH_MUTATE_PATH"):
+                 "FAKE_GH_MUTATE_PATH", "FAKE_GH_LOGIN", "FAKE_GH_COMMENT_LOGIN",
+                 "FAKE_GH_COMMENT_ISSUE_URL"):
         monkeypatch.delenv(name, raising=False)
 
     class Gh:
@@ -89,15 +90,18 @@ def write_body(tmp_path, text, name="body.md"):
 
 def request_for(case, gh_path, **overrides):
     declared = case.get("declare", {"kind": "contribution", "oversight": "active"})
+    op = case.get("op", "pr-create")
     fields = dict(
-        op=case.get("op", "pr-create"),
+        op=op,
         target="hermes-labs-ai/agent-signage",
         kind=declared["kind"],
         oversight=declared["oversight"],
-        pr=12 if case.get("op") == "pr-edit" else None,
-        title=None if case.get("op") == "pr-edit" else "feat: publication boundary",
+        pr=12 if op == "pr-edit" else None,
+        title="feat: publication boundary" if op == "pr-create" else None,
         preserve=tuple(case.get("preserve", [])),
         gh=gh_path,
+        issue=7 if op in publish.ISSUE_OPS else None,
+        comment=4242 if op == "issue-comment-edit" else None,
     )
     fields.update(overrides)
     return publish.Request(**fields)
@@ -142,13 +146,22 @@ def test_publish_matrix(case, tmp_path, gh, monkeypatch, capsys):
         assert result.child_status == expect["child_status"]
         assert str(expect["child_status"]) in printed
     if expect.get("stdin_is_snapshot"):
-        writes = [call for call in calls
-                  if call["argv"][:2] in (["pr", "create"], ["pr", "edit"])]
+        writes = [call for call in calls if _is_write(call["argv"])]
         assert len(writes) == 1
         assert writes[0]["stdin_text"] == text
-        assert "--body-file" in writes[0]["argv"]
-        assert writes[0]["argv"][writes[0]["argv"].index("--body-file") + 1] == "-"
+        argv = writes[0]["argv"]
+        if argv[0] == "api":
+            assert argv[-2:] == ["-F", "body=@-"]
+        else:
+            assert "--body-file" in argv
+            assert argv[argv.index("--body-file") + 1] == "-"
         assert "PUBLISHED" in printed
+
+
+def _is_write(argv):
+    return (argv[:2] in (["pr", "create"], ["pr", "edit"])
+            or (argv[:1] == ["api"] and "--method" in argv
+                and argv[argv.index("--method") + 1] in ("POST", "PATCH")))
 
 
 @pytest.mark.parametrize(
@@ -173,7 +186,7 @@ def test_bash_boundary_matrix(case, monkeypatch):
     else:
         decision = output["hookSpecificOutput"]
         assert decision["permissionDecision"] == "deny"
-        assert "publish pr-%s" % expected in decision["permissionDecisionReason"]
+        assert "publish %s" % gate.DENY_OPS[expected] in decision["permissionDecisionReason"]
 
 
 def test_matrix_exercises_both_surfaces_in_both_directions():
@@ -513,10 +526,185 @@ def test_request_validation_refuses_what_it_cannot_state(overrides, message):
         publish.validate_request(request_for(case, "gh", **overrides))
 
 
-def test_pr_comment_is_not_a_supported_operation():
-    assert publish.OPS == ("pr-create", "pr-edit")
+def test_supported_operations_are_exact():
+    assert publish.OPS == ("pr-create", "pr-edit", "issue-comment-create", "issue-comment-edit")
     assert "pr-comment" not in publish.OPS
-    assert gate.GUARDED_SUBCOMMANDS == ("create", "edit")
+    assert gate.GUARDED_SUBCOMMANDS == ("create", "edit", "comment")
+
+
+# The openai/codex#42311 regression: a direct external issue comment was
+# neither guarded by the Bash adapter nor publishable through the checked path.
+OBSERVED_ISSUE_COMMENT = "gh issue comment 42311 --repo openai/codex --body-file body.md"
+
+
+def test_observed_direct_external_issue_comment_is_denied_and_names_the_publisher(monkeypatch):
+    monkeypatch.setattr(gate, "_cwd_is_internal", lambda cwd: False)
+    output = gate.run(json.dumps({
+        "tool_name": "Bash", "cwd": "/a/checkout",
+        "tool_input": {"command": OBSERVED_ISSUE_COMMENT},
+    }))
+    assert output is not None, "direct external gh issue comment was not guarded"
+    decision = output["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert "publish issue-comment-create" in decision["permissionDecisionReason"]
+
+
+def test_issue_comments_have_a_checked_publisher_operation():
+    assert "issue-comment-create" in publish.OPS
+    assert "issue-comment-edit" in publish.OPS
+
+
+def _issue_request(gh_path, op="issue-comment-create", **overrides):
+    fields = dict(op=op, target="hermes-labs-ai/agent-signage", kind="contribution",
+                  oversight="none", issue=7, gh=gh_path,
+                  comment=4242 if op == "issue-comment-edit" else None)
+    fields.update(overrides)
+    return publish.Request(**fields)
+
+
+def test_issue_comment_create_sends_the_snapshot_and_verifies_by_comment_id(
+    tmp_path, gh, capsys
+):
+    text = "Repro notes.\n\n%s\n" % preflight.attribution_block("contribution", "none")
+    path = write_body(tmp_path, text)
+    result = publish.publish(str(path), _issue_request(gh.path))
+    printed = capsys.readouterr().out
+
+    assert result.exit_code == publish.EXIT_PASS, printed
+    send, view = gh.calls()
+    assert send["argv"] == ["api", "--method", "POST",
+                            "repos/hermes-labs-ai/agent-signage/issues/7/comments",
+                            "-F", "body=@-"]
+    assert send["stdin_text"] == text
+    assert str(path) not in json.dumps(send["argv"])
+    assert view["argv"] == ["api", "repos/hermes-labs-ai/agent-signage/issues/comments/4242"]
+    assert view["stdin_len"] == 0
+    assert result.url == "https://github.com/hermes-labs-ai/agent-signage/issues/7#issuecomment-4242"
+    assert "PUBLISHED" in printed and "matched byte for byte" in printed
+    assert "hermes-labs-ai/agent-signage#7 (new issue comment)" in printed
+
+
+def test_issue_comment_edit_pre_reads_patches_and_reads_back_the_concrete_id(
+    tmp_path, gh, capsys
+):
+    text = "%s\n" % preflight.attribution_block("review", "none")
+    path = write_body(tmp_path, text)
+    result = publish.publish(str(path), _issue_request(
+        gh.path, op="issue-comment-edit", kind="review"))
+    capsys.readouterr()
+    assert result.exit_code == publish.EXIT_PASS
+    before, send, view = gh.calls()
+    endpoint = "repos/hermes-labs-ai/agent-signage/issues/comments/4242"
+    assert before["argv"] == ["api", endpoint]
+    assert send["argv"] == ["api", "--method", "PATCH", endpoint, "-F", "body=@-"]
+    assert send["stdin_text"] == text
+    assert view["argv"] == ["api", endpoint]
+
+
+def test_issue_comment_edit_preserves_live_disclosures(tmp_path, gh, capsys):
+    disclosure = "Disclosure: Rolando Bosch maintains Little Canary."
+    gh.store_path.write_text("Old comment.\n\n%s\n" % disclosure, encoding="utf-8")
+    path = write_body(tmp_path, "%s\n" % preflight.attribution_block("review", "none"))
+    result = publish.publish(str(path), _issue_request(
+        gh.path, op="issue-comment-edit", kind="review"))
+    printed = capsys.readouterr().out
+    assert result.exit_code == publish.EXIT_REJECT
+    assert "disclosure-dropped" in printed
+    assert "only a read-only gh api comment read was invoked" in printed
+    assert [call["argv"] for call in gh.calls()] == [
+        ["api", "repos/hermes-labs-ai/agent-signage/issues/comments/4242"]]
+
+
+def test_issue_comment_edit_refuses_a_comment_on_another_issue(tmp_path, gh, monkeypatch, capsys):
+    monkeypatch.setenv("FAKE_GH_COMMENT_ISSUE_URL",
+                       "https://api.github.com/repos/hermes-labs-ai/agent-signage/issues/8")
+    path = write_body(tmp_path, "%s\n" % preflight.attribution_block("contribution", "none"))
+    result = publish.publish(str(path), _issue_request(gh.path, op="issue-comment-edit"))
+    printed = capsys.readouterr().out
+    assert result.exit_code == publish.EXIT_REJECT
+    assert "comment-target-mismatch" in printed
+    assert len(gh.calls()) == 1
+
+
+def test_issue_comment_rejected_attribution_starts_no_child(tmp_path, gh, capsys):
+    path = write_body(tmp_path, "Generic AI disclosure only.\n")
+    result = publish.publish(str(path), _issue_request(gh.path))
+    printed = capsys.readouterr().out
+    assert result.exit_code == publish.EXIT_REJECT
+    assert gh.calls() == [] and "attribution-missing" in printed
+
+
+@pytest.mark.parametrize("mode, env, exit_code, marker", [
+    ("no-json", {"FAKE_GH_NO_URL": "1"}, publish.EXIT_READBACK, "may exist"),
+    ("tampered", {"FAKE_GH_VIEW_BODY": "unchecked"}, publish.EXIT_READBACK, "MISMATCH"),
+    ("unreadable", {"FAKE_GH_VIEW_FAIL": "1"}, publish.EXIT_READBACK, "UNVERIFIED"),
+    ("fails", {"FAKE_GH_FAIL": "7"}, publish.EXIT_CHILD, "gh exited 7"),
+])
+def test_issue_comment_create_never_rounds_up_an_unverified_write(
+    tmp_path, gh, monkeypatch, capsys, mode, env, exit_code, marker
+):
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    path = write_body(tmp_path, "%s\n" % preflight.attribution_block("contribution", "none"))
+    result = publish.publish(str(path), _issue_request(gh.path))
+    printed = capsys.readouterr().out
+    assert result.exit_code == exit_code, printed
+    assert marker in printed
+    assert "PUBLISHED" not in printed and "Nothing was reverted" in printed
+
+
+def test_issue_comment_selection_binds_account_host_and_comment_author(
+    tmp_path, gh, monkeypatch, capsys
+):
+    from agent_signage import contribution
+
+    text = "Notes.\n\n%s\n" % contribution.footer("unspecified")
+    path = write_body(tmp_path, text)
+    request = _issue_request(gh.path, selection="unspecified", target="openai/codex", issue=42311)
+
+    monkeypatch.setenv("FAKE_GH_LOGIN", "someone-else")
+    assert publish.publish(str(path), request).exit_code == publish.EXIT_REJECT
+    assert [call["argv"] for call in gh.calls()] == [
+        ["api", "--hostname", "github.com", "user", "--jq", ".login"]]
+
+    monkeypatch.delenv("FAKE_GH_LOGIN")
+    gh.log_path.write_text("", encoding="utf-8")
+    assert publish.publish(str(path), request).exit_code == publish.EXIT_PASS
+    calls = [call["argv"] for call in gh.calls()]
+    assert all(argv[:3] == ["api", "--hostname", "github.com"] for argv in calls)
+    assert calls[1][3:] == ["--method", "POST", "repos/openai/codex/issues/42311/comments",
+                            "-F", "body=@-"]
+
+    monkeypatch.setenv("FAKE_GH_COMMENT_LOGIN", "someone-else")
+    assert publish.publish(str(path), request).exit_code == publish.EXIT_READBACK
+    assert "authored by 'someone-else'" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("overrides, message", [
+    ({"issue": None}, "--issue"),
+    ({"issue": 0}, "--issue"),
+    ({"issue": True}, "--issue"),
+    ({"op": "issue-comment-edit", "comment": None}, "--comment"),
+    ({"op": "issue-comment-edit", "comment": 0}, "--comment"),
+    ({"op": "issue-comment-edit", "comment": 2 ** 63}, "--comment"),
+    ({"comment": 5}, "--comment applies only"),
+    ({"target": "../agent-signage"}, "owner/repository"),
+    ({"target": "openai/.."}, "owner/repository"),
+    ({"title": "t"}, "do not apply"),
+    ({"pr": 3}, "do not apply"),
+    ({"op": "pr-edit", "pr": 3}, "apply only to issue comments"),
+])
+def test_issue_comment_request_validation(overrides, message):
+    with pytest.raises(preflight.PreflightError, match=message):
+        publish.validate_request(_issue_request("gh", **overrides))
+
+
+def test_issue_comment_cli_requires_a_concrete_comment_id_for_edit(tmp_path):
+    body = write_body(tmp_path, "x\n")
+    result = _cli("publish", "issue-comment-edit", "--body-file", str(body), "--target", "o/r",
+                  "--issue", "3", "--kind", "contribution", "--oversight", "none")
+    assert result.returncode == publish.EXIT_INPUT
+    assert "--comment" in result.stderr
 
 
 # ------------------------------------------------------------- the CLI surface
@@ -699,6 +887,26 @@ def _gate_decision(command, cwd_internal):
     ("gh pr create --title \"t", False, "deny"),
     ("$(command -v gh) pr create --repo hermes-labs-ai/r --title t", False, None),
     ("$(command -v gh) pr create --repo someone/upstream --title t", True, "deny"),
+    # Issue and PR conversation comments with a supplied body.
+    ("gh issue comment 42311 --repo openai/codex --body-file body.md", True, "deny"),
+    ("gh issue comment 3 -R someone/upstream -b hi", True, "deny"),
+    ("gh issue comment 3 --repo someone/upstream --body=hi", True, "deny"),
+    ("gh issue comment 3 --repo someone/upstream --edit-last -F -", True, "deny"),
+    ("gh issue comment https://github.com/someone/upstream/issues/3 --body x", True, "deny"),
+    ("gh pr comment 3 --repo someone/upstream --body x", True, "deny"),
+    ("GH_REPO=someone/upstream gh issue comment 3 --body x", True, "deny"),
+    ("make && gh issue comment 3 --repo someone/upstream --body \"x", True, "deny"),
+    ("gh issue comment 3 --repo hermes-labs-ai/r --body x", False, None),
+    ("gh issue comment https://github.com/hermes-labs-ai/r/issues/3 --body x", False, None),
+    ("gh issue comment 3 --body x", True, None),
+    ("gh issue comment 3 --body x", False, "deny"),
+    # No body flag, reads, and other issue verbs stay silent.
+    ("gh issue comment 3 --repo someone/upstream --web", False, None),
+    ("gh issue view 3 --repo someone/upstream --comments", False, None),
+    ("gh issue create --repo someone/upstream --title t", False, None),
+    ("gh issue comment 3 --repo someone/upstream --help --body x", False, None),
+    # Documented remaining bypass: raw REST calls are not parsed.
+    ("gh api repos/someone/upstream/issues/3/comments -F body=@b.md", False, None),
 ])
 def test_gate_enforces_external_targets_and_exempts_internal_ones(
     monkeypatch, command, cwd_internal, expected
@@ -890,6 +1098,8 @@ def test_gate_failure_fallback_mirrors_the_external_boundary(monkeypatch, capsys
     assert decision("gh pr create --repo hermes-labs-ai/r --title t") is None
     assert decision("gh pr edit 3 -R hermes-labs-ai/r --body x") is None
     assert decision("gh pr view 3 --repo someone/upstream") is None
+    assert decision("gh issue comment 3 --repo someone/upstream --body x") == "deny"
+    assert decision("gh issue comment 3 --repo hermes-labs-ai/r --body x") is None
 
     # A clearly internal checkout exempts the plainest payload, whose command
     # follows a JSON quote rather than whitespace, but not an external target.

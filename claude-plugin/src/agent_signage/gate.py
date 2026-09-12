@@ -1,11 +1,12 @@
-"""PreToolUse Bash boundary adapter for external PR-body publication.
+"""PreToolUse Bash boundary adapter for external PR-body and comment publication.
 
 The publisher only owns the path that goes through it. An agent with a shell can
 reach `gh` without it, so a checkable verdict is not yet a chokepoint. This
 adapter is the chokepoint for one surface -- the harness's Bash tool -- and it
-does exactly one thing: when a Bash command would create a PR or replace its
-body directly on an external or unresolved target, it denies and names the
-publisher. Internal PRs that target `hermes-labs-ai/*` are exempt.
+does exactly one thing: when a Bash command would create a PR, replace its
+body, or post an issue/PR comment body (`gh issue comment`, `gh pr comment`)
+directly on an external or unresolved target, it denies and names the
+publisher. Internal work that targets `hermes-labs-ai/*` is exempt.
 
 Two contracts are deliberately not shared with `hook.py`:
 
@@ -22,15 +23,18 @@ as data. Two bounded fixed-argv git measurements (`git rev-parse --show-toplevel
 then `git remote -v`) may run to establish work context when the command does
 not name a target.
 
-The target decides. An explicit target (`--repo`/`-R`, a PR URL, or `GH_REPO`)
+The target decides. An explicit target (`--repo`/`-R`, a PR or issue URL, or `GH_REPO`)
 is exempt only when every such target is `hermes-labs-ai/*`. Without one, the
 call is exempt only when the working checkout is clearly internal: every
 remote is a `hermes-labs-ai/*` GitHub repository and the command does not
 change directory or git context first. Everything else -- an external target,
 a personal fork, a non-repository, an unreadable remote -- is external or
-unknown and denied. Metadata-only PR edits, `gh pr view`, `gh pr list`,
-`gh issue create`, `git push`, and unrelated commands are silent -- an adapter
-that denied broadly would guard nothing.
+unknown and denied. Metadata-only PR edits, comment commands with no body flag
+(`--web`, `--editor`), `gh pr view`, `gh pr list`, `gh issue create`,
+`git push`, and unrelated commands are silent -- an adapter that denied broadly
+would guard nothing. Raw `gh api` requests (for example a POST to
+`repos/O/R/issues/N/comments`) are a known remaining bypass: judging arbitrary
+REST paths, methods and field syntax is a parser this adapter does not attempt.
 """
 
 from __future__ import annotations
@@ -43,7 +47,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import gitfacts
 
-GUARDED_SUBCOMMANDS = ("create", "edit")
+GUARDED_SUBCOMMANDS = ("create", "edit", "comment")
+# The checked publisher operation each denial names.
+DENY_OPS = {"create": "pr-create", "edit": "pr-edit", "comment": "issue-comment-create"}
 # Owners whose PRs are internal work and exempt from the external attribution
 # boundary. Nothing else is: personal forks and upstream targets are external.
 INTERNAL_OWNERS = ("hermes-labs-ai",)
@@ -79,7 +85,7 @@ _SHELL_INTERPRETERS = {"bash", "dash", "fish", "ksh", "sh", "zsh"}
 _DYNAMIC_GUARDED_RE = re.compile(
     r"(?:^|[;&|(\n])\s*[\"']?"
     r"(?:\$\([^\n)]*\)|`[^\n`]*`|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*)"
-    r"[\"']?\s+pr\s+(?P<operation>create|new|edit)\b"
+    r"[\"']?\s+(?P<noun>pr|issue)\s+(?P<operation>create|new|edit|comment)\b"
     r"(?P<tail>[^;&|\n]*)",
 )
 
@@ -90,13 +96,17 @@ _ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _GH_VALUE_OPTIONS = {"--hostname", "--repo", "-R"}
 # The conservative fallback, used only when the line cannot be tokenised.
 _RAW_RE = re.compile(
-    r"(?:^|[\s;&|(`$])gh(?:\.exe)?\b[^;&|\n]*?\bpr\b[^;&|\n]*?\b(?:create|new|edit)\b")
+    r"(?:^|[\s;&|(`$])gh(?:\.exe)?\b[^;&|\n]*?"
+    r"(?:\bpr\b[^;&|\n]*?\b(?P<pr>create|new|edit|comment)\b"
+    r"|\bissue\b[^;&|\n]*?\b(?P<issue>comment)\b)")
 # Explicit targets in a line that could not be tokenised. The fallback reads
 # the same three sources as the parsed path so it exempts and denies alike.
 _RAW_REPO_FLAG_RE = re.compile(
     r"(?:^|[\s;&|(`'\"])(?:--repo(?:=|\s+)|-R(?:=|\s+)?)['\"]?(?P<value>[^\s'\";&|()`]+)")
+# PR and issue URLs: both name the target of `gh pr ...` and `gh issue comment`.
 _PR_URL_RE = re.compile(
-    r"https?://(?P<host>[^/\s'\"]+)/(?P<owner>[^/\s'\"]+)/[^/\s'\"]+/pull/\d+", re.IGNORECASE)
+    r"https?://(?P<host>[^/\s'\"]+)/(?P<owner>[^/\s'\"]+)/[^/\s'\"]+/(?:pull|issues)/\d+",
+    re.IGNORECASE)
 # gh reads GH_REPO as the target when `--repo` is absent. A mention without a
 # readable value (`unset GH_REPO`, `export GH_REPO`) leaves the target unknown.
 _GH_REPO_RE = re.compile(r"\bGH_REPO\b(?:=['\"]?(?P<value>[^\s'\";&|()`]*))?")
@@ -121,7 +131,7 @@ _GH_OPTIONS_WITH_VALUES = {
 }
 
 REASON = (
-    "agent-signage: direct `gh pr {sub}` is not the supported publication path for an "
+    "agent-signage: direct {direct} is not the supported publication path for an "
     "external or unresolved target. Publish through the checked boundary instead, which "
     "validates the attribution on the exact bytes it sends and verifies the published "
     "body afterwards:\n"
@@ -131,7 +141,7 @@ REASON = (
     "Choose `--kind review` or `--oversight active` only when those declarations are true. "
     "`--oversight` has no default and is a caller declaration, not a verified fact. "
     "Read-only gh commands such as `gh pr view` and `gh pr list` are unaffected. "
-    "Internal PRs are exempt only when the target is `hermes-labs-ai/*`: name it with "
+    "Internal work is exempt only when the target is `hermes-labs-ai/*`: name it with "
     "`--repo hermes-labs-ai/REPO` when the working checkout does not establish it."
 )
 
@@ -204,8 +214,9 @@ def _guarded_subcommand(segment: List[str]) -> Optional[str]:
             index += 1
             continue
         break
-    if index >= len(args) or args[index] != "pr":
+    if index >= len(args) or args[index] not in ("pr", "issue"):
         return None
+    noun = args[index]
     index += 1
     while index < len(args) and args[index].startswith("-"):
         if args[index] in _GH_VALUE_OPTIONS and "=" not in args[index]:
@@ -215,20 +226,37 @@ def _guarded_subcommand(segment: List[str]) -> Optional[str]:
     if index >= len(args):
         return None
     operation = args[index]
+    body = _sets_body(args[index + 1:])
+    if noun == "issue":
+        # `gh issue comment` without a body flag prompts, or opens an editor or
+        # browser; only a supplied body is a direct publication.
+        return "comment" if operation == "comment" and body else None
     if operation == "new":
         return "create"
     if operation == "create":
         return "create"
-    if operation == "edit" and any(
+    if operation == "edit" and body:
+        return "edit"
+    if operation == "comment" and body:
+        return "comment"
+    return None
+
+
+def _sets_body(args: List[str]) -> bool:
+    return any(
         token in _BODY_FLAGS
         or token.startswith("--body=")
         or token.startswith("--body-file=")
         or (token.startswith("-b") and token != "-b")
         or (token.startswith("-F") and token != "-F")
-        for token in args[index + 1:]
-    ):
-        return "edit"
-    return None
+        for token in args
+    )
+
+
+def _raw_operation(match: "re.Match[str]") -> str:
+    """The guarded operation an untokenisable `_RAW_RE` match names."""
+    operation = match.group("pr") or match.group("issue")
+    return "create" if operation == "new" else operation
 
 
 def _has_effective_help(args: List[str]) -> bool:
@@ -361,8 +389,7 @@ def _guarded_segments(
         match = _RAW_RE.search(command)
         if match is None:
             return []
-        matched = match.group(0)
-        return [("edit" if re.search(r"\bedit\b", matched) else "create", None)]
+        return [(_raw_operation(match), None)]
     guarded = [(found, segment) for segment in segments
                for found in [_guarded_subcommand(segment)] if found is not None]
     if depth >= 4:
@@ -371,7 +398,7 @@ def _guarded_segments(
         guarded.extend(_guarded_segments(nested, depth + 1))
     for match in _DYNAMIC_GUARDED_RE.finditer(command):
         operation = match.group("operation")
-        candidate = "gh pr %s%s" % (operation, match.group("tail"))
+        candidate = "gh %s %s%s" % (match.group("noun"), operation, match.group("tail"))
         dynamic = _guarded_subcommand(_token_segments(candidate)[0])
         if dynamic is not None:
             guarded.append((dynamic, None))
@@ -581,13 +608,21 @@ def guarded_subcommand(command: str) -> Optional[str]:
 
 
 def deny_output(subcommand: str) -> Dict[str, Any]:
-    op = "pr-%s" % subcommand
-    extra = " --title 'feat: ...'" if subcommand == "create" else " --pr N"
+    op = DENY_OPS[subcommand]
+    direct = {"create": "`gh pr create`", "edit": "`gh pr edit`",
+              "comment": "`gh issue comment` or `gh pr comment`"}[subcommand]
+    extra = {
+        "create": " --title 'feat: ...'",
+        "edit": " --pr N",
+        "comment": " --issue N\n"
+                   "To replace an existing comment body, use `publish issue-comment-edit "
+                   "--issue N --comment COMMENT_ID`, which keeps its recognized disclosures.",
+    }[subcommand]
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": REASON.format(sub=subcommand, op=op, extra=extra),
+            "permissionDecisionReason": REASON.format(direct=direct, op=op, extra=extra),
         }
     }
 
@@ -665,8 +700,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             internal = _is_internal(_raw_targets(text), text, cwd_internal)
         except Exception:
             internal = False
-        out = deny_output("edit" if match and "edit" in match.group(0) else "create") \
-            if match and not internal else None
+        out = deny_output(_raw_operation(match)) if match and not internal else None
     if out is not None:
         try:
             sys.stdout.write(json.dumps(out))

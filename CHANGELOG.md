@@ -11,6 +11,16 @@ once it reaches 1.0. Before 1.0, minor version bumps may include breaking change
 ## [0.2.0] - 2026-09-07
 
 ### Added
+- **Issue comments cross the publication boundary.** A public upstream comment was posted with
+  direct `gh` and only a generic disclosure: the publisher supported only `pr-create`/`pr-edit`
+  and the Bash adapter was silent on `gh issue comment`. `agent-signage publish
+  issue-comment-create --issue N` and `issue-comment-edit --issue N --comment ID` now snapshot the
+  body once, apply the same attribution/selection checks, send the bytes to `gh api` on stdin
+  (`-F body=@-`), and read the comment back by concrete ID, requiring the exact body, the
+  declared issue, and (with `--selection`) `github.com` and the bound comment author. Edits
+  pre-read the comment and keep its recognized disclosures. The Bash adapter now denies
+  `gh issue comment` and `gh pr comment` with a body flag on external or unresolved targets. Raw
+  `gh api` writes remain unparsed and are documented as a bypass.
 - `agent_signage.lab_card`: turn a Hermes Reliability Lab `hermes.reliability-lab.result/1` envelope into an operational Card, or into nothing. A card is licensed only by `mode: executed` and `status: pass`; anything else -- preview, warn, unknown, fail, or the wrong schema -- returns `None`.
 - `python -m agent_signage.evidence`: CLI/library wrapper that reads a source envelope, renders through `lab_card`, and reports the outcome (card or no card, and why) as an `agent-signage`-authored `hermes.reliability-lab.result/1` envelope of its own. Also refuses a source whose `status` disagrees with its own `findings`.
 - `Card.strict()`: the validated card-construction path `load_card` already used, now exposed for any caller building a card in memory rather than from a JSON file.

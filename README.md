@@ -411,6 +411,26 @@ It runs `gh` itself, in a fixed order that a caller cannot reassemble wrongly:
    changed after step 2.
 6. **Read the body back** with `gh pr view --json body` and require exact equality.
 
+Issue comments use the same order. `gh issue comment` can only edit "the last comment of the
+current user", not a concrete comment, so both comment operations go through `gh api` with the
+body on stdin (`-F body=@-`) and read back the concrete comment ID:
+
+```bash
+python3 scripts/publish.py issue-comment-create --issue 123 \
+  --body-file /abs/path/to/comment.md --target owner/repo \
+  --kind contribution --oversight none --selection unspecified
+python3 scripts/publish.py issue-comment-edit --issue 123 --comment 4567890123 \
+  --body-file /abs/path/to/comment.md --target owner/repo \
+  --kind contribution --oversight none --selection unspecified
+```
+
+`issue-comment-create` POSTs to `repos/OWNER/REPO/issues/N/comments` and takes the new comment
+ID from the JSON response; `issue-comment-edit` first reads comment `--comment`, requires it to
+belong to issue `--issue` and keeps its recognized disclosure trailers, then PATCHes it. Both
+read the comment back by ID and require the exact body, the declared issue, and -- with
+`--selection` -- `github.com` on every call and `roli-lpci` as the comment author. A PR number
+is accepted as `--issue`, because a PR conversation comment is the same GitHub object.
+
 Success is claimed only after step 6.
 
 | Exit | Meaning |
@@ -418,22 +438,24 @@ Success is claimed only after step 6.
 | `0` | Published, and the body read back byte for byte |
 | `1` | Artifact rejected — no mutating `gh` child was started; edit preservation may make one read-only view call |
 | `2` | Input or usage rejected — no `gh` child was started |
-| `3` | A `gh` child failed; its exit status and stderr are reported, not swallowed. On `pr-edit` a failed read-only pre-read exits here too, and no update was attempted |
+| `3` | A `gh` child failed; its exit status and stderr are reported, not swallowed. On `pr-edit` or `issue-comment-edit` a failed read-only pre-read exits here too, and no update was attempted |
 | `4` | `gh` succeeded but the published body could not be verified as the checked bytes |
 
-Exits 3 and 4 say plainly what is true: the pull request may exist, nothing was reverted, and
-this is not a successful publication.
+Exits 3 and 4 say plainly what is true: the pull request or comment may exist, nothing was
+reverted, and this is not a successful publication.
 
-Supported operations are exactly **`pr-create`** and **`pr-edit`**. `pr-comment` was in an
-earlier draft and is gone — an operation nobody had exercised end to end was scope, not
-coverage.
+Supported operations are exactly **`pr-create`**, **`pr-edit`**, **`issue-comment-create`**, and
+**`issue-comment-edit`**. `pr-comment` was in an earlier draft and is gone — an operation nobody
+had exercised end to end was scope, not coverage. Issue comments were added after a public
+upstream comment was posted with direct `gh` and only a generic disclosure, because nothing
+here covered them.
 
 ### The Bash boundary adapter
 
 The publisher only owns the path that goes through it. `scripts/gate.py` is a separate
-`PreToolUse` hook for the **Bash** tool that denies a `gh pr create`/`gh pr new` or a
-body-mutating `gh pr edit` call on an external or unresolved target, and names the publisher
-instead:
+`PreToolUse` hook for the **Bash** tool that denies a `gh pr create`/`gh pr new`, a
+body-mutating `gh pr edit`, or a `gh issue comment`/`gh pr comment` with a body flag on an
+external or unresolved target, and names the publisher instead:
 
 ```bash
 $ echo '{"tool_name":"Bash","tool_input":{"command":"gh pr create --repo someone/upstream --title t"}}' \
@@ -452,7 +474,7 @@ argvs (`git rev-parse --show-toplevel`, then `git remote -v`) establish work con
 The target decides. The attribution boundary applies to external contributions; internal PRs
 that target `hermes-labs-ai/*` are exempt:
 
-- An explicit target (`--repo`/`-R`, a PR URL passed to `gh pr edit`, or `GH_REPO`) is silent
+- An explicit target (`--repo`/`-R`, a PR or issue URL argument, or `GH_REPO`) is silent
   only when every such target is a `hermes-labs-ai/*` GitHub repository. Any other explicit
   target — an upstream project, a personal fork, another host — is denied.
 - With no explicit target, the call is silent only when the working checkout is clearly
@@ -464,8 +486,9 @@ that target `hermes-labs-ai/*` are exempt:
 - An untokenisable guarded shape, and the adapter's own failure fallback, read the same
   explicit targets as text and apply the same rule.
 
-Metadata-only `gh pr edit`, read-only/help commands, shell comments and literal heredoc data,
-other `gh` nouns, and unrelated commands are silent.
+Metadata-only `gh pr edit`, comment commands without a body flag (`--web`, `--editor`),
+read-only/help commands, shell comments and literal heredoc data, other `gh` nouns and verbs
+(including `gh issue create`), and unrelated commands are silent.
 
 For Codex, install it additively with `agent-signage install-publication-gate`; for Claude Code,
 use the equivalent settings entry below. See [Wire the adapter](#wire-the-adapter).
@@ -583,6 +606,11 @@ publisher is a convention, not a boundary.
   API, a browser session, an MCP server, or its own built-in PR tool never produces a Bash
   command, so this adapter never sees it. Codex and Claude Code are covered only when their
   respective `PreToolUse` entry is active; Cursor, Aider, and other harnesses remain uncovered.
+- **Raw `gh api` is not judged.** `gh api repos/O/R/issues/N/comments -F body=@b.md` (and any
+  other REST or GraphQL write) passes the Bash adapter silently; parsing arbitrary endpoints,
+  methods and field syntax would be a far larger and riskier parser. `gh issue create --body`
+  and `gh pr review --body` are likewise not guarded. Use the publisher; do not treat the
+  adapter as covering these.
 - **A `PreToolUse` deny is a harness-level decision, not an OS one.** Anything that can spawn a
   process outside the harness's tool loop — a Makefile target, a CI job, a shell the user opens
   themselves — is outside it.
@@ -594,10 +622,10 @@ publisher is a convention, not a boundary.
   a mismatch is not automatically a security event; read the two digests it prints.
 - **It checks the artifact, not the work.** A body can carry a perfectly true attribution and
   describe a change nobody should merge.
-- **Edit preservation is snapshot-bound.** `pr-edit` automatically binds conventional trailers
+- **Edit preservation is snapshot-bound.** `pr-edit` and `issue-comment-edit` automatically bind conventional trailers
   such as `Disclosure:`, `Co-Authored-By:`, and `Signed-off-by:` from the live body it reads;
-  use `--preserve` for project-specific wording. `gh pr edit` exposes no conditional revision
-  token, so a concurrent body edit after that pre-read remains a race. Exact post-write readback
+  use `--preserve` for project-specific wording. Neither `gh pr edit` nor the comment PATCH
+  exposes a conditional revision token, so a concurrent body edit after that pre-read remains a race. Exact post-write readback
   proves what this publisher wrote, not that no one raced it.
 - **Nothing in this repository enforces the boundary on itself.**
 

@@ -88,7 +88,7 @@ def _boundary_properties() -> dict:
     artifact with no attribution or one whose claim exceeds what the caller
     declared, that a block hidden in a code fence does not count as a statement,
     that the generated wording passes its own check, and that the Bash adapter
-    denies exactly the two guarded calls and nothing else.
+    denies exactly the guarded calls and nothing else.
     """
     from . import gate, preflight, publish
 
@@ -107,18 +107,24 @@ def _boundary_properties() -> dict:
             fenced, kind="contribution", oversight="active"),
         "generated": preflight.check(block, kind="contribution", oversight="active").ok,
         "deny": (gate.guarded_subcommand("make x && gh pr create -t t") == "create"
-                 and gate.guarded_subcommand("gh pr edit 3 --body x") == "edit"),
+                 and gate.guarded_subcommand("gh pr edit 3 --body x") == "edit"
+                 and gate.guarded_subcommand(
+                     "gh issue comment 1 --repo o/r --body-file b.md") == "comment"),
         "silent": all(gate.guarded_subcommand(c) is None for c in
                       ("ls -la", "gh pr view 3", "git push", "gh issue create",
                        "gh pr list --search pr --label create")),
         "codex": gate.run(
             '{"tool_name":"Bash","tool_input":{"cmd":"gh pr create --repo '
-            'hermes-labs-ai/r --title t"}}'
+            'someone/r --title t"}}'
         )["hookSpecificOutput"]["permissionDecision"] == "deny",
-        "ops": publish.OPS == ("pr-create", "pr-edit"),
+        "ops": publish.OPS == ("pr-create", "pr-edit",
+                               "issue-comment-create", "issue-comment-edit"),
         "stdin": publish.publish_argv(
             publish.Request(op="pr-edit", target="o/r", kind="contribution",
-                            oversight="none", pr=1))[-2:] == ["--body-file", "-"],
+                            oversight="none", pr=1))[-2:] == ["--body-file", "-"]
+        and publish.publish_argv(
+            publish.Request(op="issue-comment-edit", target="o/r", kind="contribution",
+                            oversight="none", issue=1, comment=2))[-2:] == ["-F", "body=@-"],
     }
 
 
@@ -199,10 +205,10 @@ def _cmd_selftest(args) -> int:
     check("checker rejects a claim beyond the declaration", _b["beyond"])
     check("checker rejects a block hidden in a fence", _b["hidden"])
     check("generated wording passes its own check", _b["generated"])
-    check("bash adapter denies direct gh pr create/edit", _b["deny"])
+    check("bash adapter denies direct gh pr create/edit and comments", _b["deny"])
     check("bash adapter is silent on unrelated commands", _b["silent"])
     check("bash adapter accepts the Codex cmd payload", _b["codex"])
-    check("publisher supports exactly pr-create and pr-edit", _b["ops"])
+    check("publisher supports exactly PR create/edit and issue comment create/edit", _b["ops"])
     check("publisher always sends bytes on stdin", _b["stdin"])
 
     width = max(len(n) for n, _ in checks)
@@ -539,13 +545,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     pub = sub.add_parser(
         "publish",
-        help="publish a checked artifact to a GitHub pull request through gh",
+        help="publish a checked artifact to a GitHub pull request or issue comment through gh",
         description=(
             "Snapshot the body once, check it, show the sign, run gh with the same bytes "
             "on stdin, then read the published body back and require exact equality."
         ),
         epilog="0 published and verified, 1 artifact rejected, 2 input rejected, "
-               "3 a gh child failed (a failed pr-edit pre-read means no update was attempted), "
+               "3 a gh child failed (a failed edit pre-read means no update was attempted), "
                "4 published body could not be verified.",
     )
     _publish.add_arguments(pub)
@@ -557,7 +563,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     g = sub.add_parser(
         "gate",
-        help="PreToolUse Bash boundary adapter: deny direct gh pr create/edit",
+        help="PreToolUse Bash boundary adapter: deny direct gh pr create/edit and comments",
     )
     g.set_defaults(func=_cmd_gate)
 
