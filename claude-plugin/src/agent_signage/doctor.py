@@ -174,13 +174,20 @@ def evaluate_here(facts: Dict[str, Any]) -> Dict[str, str]:
     cannot make `doctor` under-report, and a write-shaped tool name, so the
     signs that only fire on writes are exercised rather than shown as inert for
     a reason that has nothing to do with this repository.
+
+    Falls back to the repository root when there is no sample file (a repo
+    with nothing tracked, e.g. only empty commits): repo-level signs like
+    `stale_checkout` only need a path to resolve the repo root from, not an
+    actual file, and must still be exercised for real rather than reported via
+    `quiet_reason`'s "this is unexpected" fallback.
     """
-    if not facts.get("sample"):
+    target = facts.get("sample") or facts.get("root")
+    if not target:
         return {}
     ctx = signs.Context(
         session_id="doctor-%d-%d" % (os.getpid(), int(time.time() * 1000)),
         tool_name="Edit",
-        target_path=facts["sample"],
+        target_path=target,
         allow_background_fetch=False,
     )
     gitfacts.clear_caches()
