@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from argparse import Namespace
 
 import pytest
@@ -173,6 +174,42 @@ def test_an_acknowledgement_is_named_as_the_reason(behind_repo, wired):
     body = "\n".join(doctor.report(str(behind_repo / "a.txt"), runs=FAST)[0])
     assert "acknowledged" in body
     assert "agent-signage clear" in body
+    assert "unexpected" not in body
+
+
+def test_speaks_when_behind_with_no_tracked_files(tmp_path, wired):
+    """A repo can be behind with nothing tracked (e.g. only empty commits).
+
+    `evaluate_here` used to bail out entirely whenever there was no sample
+    file, so a repo-level sign like `stale_checkout` -- which only needs a
+    path to resolve the repo root, not an actual file -- was reported quiet
+    via `quiet_reason`'s "this is unexpected, please report it" fallback, even
+    though the real hook fires correctly against the very same repository.
+    """
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    git(origin, "init", "-q", "-b", "main")
+    git(origin, "config", "user.email", "t@t.t")
+    git(origin, "config", "user.name", "t")
+    git(origin, "commit", "-q", "--allow-empty", "-m", "empty a")
+
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "-q", str(origin), str(clone)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    git(clone, "config", "user.email", "t@t.t")
+    git(clone, "config", "user.name", "t")
+
+    git(origin, "commit", "-q", "--allow-empty", "-m", "empty b")
+    git(clone, "fetch", "-q")
+
+    facts = doctor.collect(str(clone))
+    assert facts["sample"] is None, "fixture must have no tracked files"
+
+    lines, _ok = doctor.report(str(clone), runs=FAST)
+    body = "\n".join(lines)
+    assert "stale_checkout           SPEAKS" in body
     assert "unexpected" not in body
 
 
