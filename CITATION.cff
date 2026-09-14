@@ -8,9 +8,10 @@ abstract: >-
   behind its upstream, and injects one true, checkable fact when it is.
   Silent otherwise.
 authors:
-  - family-names: Bosch
+  - family-names: Bosch Rodriguez
     given-names: Rolando
     orcid: "https://orcid.org/0009-0005-4896-1112"
+    affiliation: Hermes Labs
 version: 0.2.0
 date-released: '2026-09-07'
 license: Apache-2.0
