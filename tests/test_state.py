@@ -72,3 +72,31 @@ def test_clear_ignores_files_it_did_not_write():
 
     assert removed == 0
     assert os.path.exists(foreign)
+
+
+def test_clear_with_no_repo_removes_pre_scoping_stamps():
+    """A full wipe must still collect stamps written before repo scoping.
+
+    Those filenames carry no repo segment, so upgrading would otherwise
+    strand every stamp the previously installed version wrote.
+    """
+    legacy = [
+        os.path.join(state.state_dir(), "sess-deadbeefcafe1234"),
+        os.path.join(state.state_dir(), "ack-deadbeefcafe1234"),
+    ]
+    for p in legacy:
+        open(p, "w").close()
+
+    removed = state.clear()
+
+    assert removed == 2
+    assert not any(os.path.exists(p) for p in legacy)
+
+
+def test_clear_scoped_to_repo_leaves_pre_scoping_stamps():
+    """A repo-scoped wipe cannot claim an unlabelled stamp as that repo's."""
+    legacy = os.path.join(state.state_dir(), "sess-deadbeefcafe1234")
+    open(legacy, "w").close()
+
+    assert state.clear(repo="/repo/a") == 0
+    assert os.path.exists(legacy)

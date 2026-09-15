@@ -154,6 +154,18 @@ def _stamp_repo_key(name: str) -> Optional[str]:
     return None
 
 
+def _is_legacy_stamp(name: str) -> bool:
+    """True for a pre-scoping `{prefix}-{key}` session/ack stamp.
+
+    Older versions wrote sess-/ack- stamps with no repo segment, so their
+    repo is unrecoverable from the filename. A full wipe must still collect
+    them -- otherwise upgrading strands every stamp the installed version
+    wrote -- while a repo-scoped wipe cannot claim them.
+    """
+    parts = name.split("-")
+    return len(parts) == 2 and parts[0] in (_SESSION_PREFIX, _ACK_PREFIX)
+
+
 def clear(repo: Optional[str] = None) -> int:
     """Remove stamps. With no `repo`, clears everything; with one, only that
     repo's session dedupe, acknowledgements, and fetch-cooldown marker.
@@ -167,7 +179,7 @@ def clear(repo: Optional[str] = None) -> int:
     target_key = _key(repo) if repo is not None else None
     for n in names:
         repo_key = _stamp_repo_key(n)
-        if repo_key is None:
+        if repo_key is None and not (target_key is None and _is_legacy_stamp(n)):
             continue
         if target_key is not None and repo_key != target_key:
             continue
