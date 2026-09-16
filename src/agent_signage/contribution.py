@@ -8,7 +8,7 @@ from . import preflight
 SELECTIONS = ("autonomous", "owner", "unspecified")
 ACCOUNT = "roli-lpci"
 SELECTION_MARK = "<!-- hermes-labs:selection autonomous -->"
-POLICY = "/Users/rbr_lpci/ai-infra/commitment-gate/DELEGATED-CONTRIBUTIONS.md"
+POLICY = "ai-infra/commitment-gate/DELEGATED-CONTRIBUTIONS.md"
 
 
 def footer(selection):
