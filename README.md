@@ -82,8 +82,27 @@ pip install git+https://github.com/hermes-labs-ai/agent-signage.git
 
 ### Claude Code
 
+Confirm the installed runtime is sound before anything is written. This is
+read-only:
+
+```bash
+agent-signage selftest    # asserts the runtime guarantees, no repo needed
+```
+
+`agent-signage install` mutates your Claude Code settings file
+(`~/.claude/settings.json` by default): it adds a `PreToolUse` hook entry and
+keeps a timestamped backup of what was there before. Re-running it is
+idempotent — it recognizes an existing entry and makes no further change.
+
 ```bash
 agent-signage install    # writes the hook entry for you
+```
+
+Read back exactly what got wired, and what it costs in this repo. This is
+also read-only:
+
+```bash
+agent-signage doctor      # what is live, what is inert, and what it costs here
 ```
 
 Or install the self-contained Claude Code plugin from the Hermes Labs
