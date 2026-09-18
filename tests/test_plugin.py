@@ -11,6 +11,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = ROOT / "claude-plugin"
 
+# Agent Plugins v1.0.0 (https://agent-plugins.org/schemas/1.0.0/plugin.schema.json):
+# the field sets a submission's root plugin.json is validated against.
+AGENT_PLUGIN_SCHEMA_URL = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+AGENT_PLUGIN_ALLOWED_TOP_LEVEL_FIELDS = {
+    "$schema",
+    "name",
+    "version",
+    "description",
+    "author",
+    "homepage",
+    "repository",
+    "license",
+    "keywords",
+    "extensions",
+}
+AGENT_PLUGIN_ALLOWED_AUTHOR_FIELDS = {"name", "email", "url"}
+
 
 def test_marketplace_points_at_the_plugin_artifact():
     manifest = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
@@ -19,6 +36,40 @@ def test_marketplace_points_at_the_plugin_artifact():
     assert manifest["plugins"][0]["source"] == "./claude-plugin"
     assert (PLUGIN_ROOT / ".claude-plugin" / "plugin.json").is_file()
     assert (PLUGIN_ROOT / "hooks" / "hooks.json").is_file()
+
+
+def test_root_plugin_manifest_exists_at_the_plugin_root():
+    # Agent Plugins v1.0.0 expects plugin.json at the plugin root (claude-plugin/),
+    # not nested under claude-plugin/.claude-plugin/ — see issue #3306.
+    assert (PLUGIN_ROOT / "plugin.json").is_file()
+
+
+def test_root_plugin_manifest_is_valid_json():
+    manifest_text = (PLUGIN_ROOT / "plugin.json").read_text()
+    manifest = json.loads(manifest_text)
+    assert isinstance(manifest, dict)
+
+
+def test_root_plugin_manifest_only_uses_allowed_agent_plugin_fields():
+    manifest = json.loads((PLUGIN_ROOT / "plugin.json").read_text())
+    assert manifest["$schema"] == AGENT_PLUGIN_SCHEMA_URL
+    assert "displayName" not in manifest
+    for field in manifest:
+        assert field in AGENT_PLUGIN_ALLOWED_TOP_LEVEL_FIELDS, field
+
+    author = manifest.get("author")
+    assert isinstance(author, dict)
+    for field, value in author.items():
+        assert field in AGENT_PLUGIN_ALLOWED_AUTHOR_FIELDS, field
+        assert isinstance(value, str)
+
+
+def test_root_plugin_manifest_matches_existing_claude_manifest():
+    root_manifest = json.loads((PLUGIN_ROOT / "plugin.json").read_text())
+    claude_manifest = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text())
+    assert root_manifest["name"] == claude_manifest["name"]
+    assert root_manifest["version"] == claude_manifest["version"]
+    assert root_manifest["author"]["name"] == claude_manifest["author"]["name"]
 
 
 def test_plugin_runtime_is_synced_with_the_source_package():
