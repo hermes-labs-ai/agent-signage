@@ -8,6 +8,12 @@ once it reaches 1.0. Before 1.0, minor version bumps may include breaking change
 
 ## [Unreleased]
 
+### Added
+- A composite GitHub Action that installs this checkout, runs the existing
+  deterministic `agent-signage preflight` command on a repository-relative
+  Markdown body, and exposes the checked body SHA-256. The action never
+  publishes or edits a GitHub object.
+
 ## [0.2.1] - 2026-09-12
 
 Everything below landed after the `v0.2.0` tag (commits `443f25a`..`8162969`, none an ancestor of

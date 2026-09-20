@@ -22,6 +22,7 @@ and silence the rest of the time.
 - [Adding your own sign](#adding-your-own-sign)
 - [Operational cards](#operational-cards)
 - [Publication boundary](#publication-boundary)
+- [GitHub Actions](#github-actions)
 - [Verify it yourself](#verify-it-yourself)
 - [Status and limitations](#status-and-limitations)
 - [Research](#research)
@@ -647,6 +648,28 @@ publisher is a convention, not a boundary.
   exposes a conditional revision token, so a concurrent body edit after that pre-read remains a race. Exact post-write readback
   proves what this publisher wrote, not that no one raced it.
 - **Nothing in this repository enforces the boundary on itself.**
+
+## GitHub Actions
+
+Use the composite action when a workflow needs a deterministic preflight of a
+pull request body before a separate publication step. It checks one visible
+Agent Signage attribution block; it does not publish or edit GitHub objects.
+
+```yaml
+- id: signage
+  uses: ./
+  with:
+    body-file: artifacts/pr-body.md
+    kind: contribution
+    oversight: none
+
+- run: echo "checked ${{ steps.signage.outputs.body_sha256 }}"
+```
+
+`body-file` must be a non-empty repository-relative file. `kind` must be
+`contribution` or `review`, and `oversight` must be `none` or `active`; these
+are caller declarations passed directly to `agent-signage preflight`. The
+`body_sha256` output is the digest of the successfully checked bytes.
 
 ## Verify it yourself
 
