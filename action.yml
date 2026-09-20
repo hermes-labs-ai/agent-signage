@@ -1,0 +1,65 @@
+name: Agent Signage preflight
+description: Check a pull request body contains one visible Agent Signage attribution block.
+inputs:
+  body-file:
+    description: Repository-relative Markdown body to check.
+    required: true
+  kind:
+    description: "Declared work kind: contribution or review."
+    required: true
+  oversight:
+    description: "Declared oversight: none or active."
+    required: true
+outputs:
+  body_sha256:
+    description: SHA-256 of the checked body after a successful preflight.
+    value: ${{ steps.preflight.outputs.body_sha256 }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: "3.11"
+    - name: Install Agent Signage from this action
+      shell: bash
+      run: python -m pip install "$GITHUB_ACTION_PATH"
+    - name: Check the declared attribution
+      id: preflight
+      shell: bash
+      env:
+        INPUT_BODY_FILE: ${{ inputs.body-file }}
+        INPUT_KIND: ${{ inputs.kind }}
+        INPUT_OVERSIGHT: ${{ inputs.oversight }}
+      run: |
+        set -euo pipefail
+        case "$INPUT_BODY_FILE" in
+          ""|/*) echo "body-file must be a non-empty repository-relative path" >&2; exit 2 ;;
+        esac
+        BODY_FILE="$(python - "$GITHUB_WORKSPACE" "$INPUT_BODY_FILE" <<'PY'
+        import os
+        import sys
+        from pathlib import Path
+
+        root = Path(sys.argv[1]).resolve()
+        body = (root / sys.argv[2]).resolve(strict=True)
+        if os.path.commonpath((str(root), str(body))) != str(root) or not body.is_file():
+            raise SystemExit("body-file must resolve to a file inside GITHUB_WORKSPACE")
+        print(body)
+        PY
+        )"
+        SNAPSHOT="$(mktemp "${RUNNER_TEMP:-/tmp}/agent-signage-body.XXXXXX")"
+        trap 'rm -f "$SNAPSHOT"' EXIT
+        python - "$BODY_FILE" "$SNAPSHOT" <<'PY'
+        from pathlib import Path
+        import sys
+
+        Path(sys.argv[2]).write_bytes(Path(sys.argv[1]).read_bytes())
+        PY
+        agent-signage preflight --body-file "$SNAPSHOT" --kind "$INPUT_KIND" --oversight "$INPUT_OVERSIGHT"
+        BODY_SHA256="$(python - "$SNAPSHOT" <<'PY'
+        import hashlib
+        import sys
+        print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())
+        PY
+        )"
+        echo "body_sha256=$BODY_SHA256" >> "$GITHUB_OUTPUT"

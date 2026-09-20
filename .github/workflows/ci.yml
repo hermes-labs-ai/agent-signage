@@ -31,3 +31,20 @@ jobs:
 
       - name: Selftest
         run: agent-signage selftest
+
+  action-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - id: signage
+        uses: ./
+        with:
+          body-file: examples/preflight-contribution.md
+          kind: contribution
+          oversight: none
+
+      - name: Assert checked-body digest
+        env:
+          BODY_SHA256: ${{ steps.signage.outputs.body_sha256 }}
+        run: test "$BODY_SHA256" = "f5c5f1c635a598d389af0be378f2b1424d6b2d131b8ce4a3b986106abd44d51f"
