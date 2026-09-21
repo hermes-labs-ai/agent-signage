@@ -3,6 +3,10 @@
 **Road signs for coding agents.** One true fact, delivered at the moment your agent acts —
 and silence the rest of the time.
 
+agent-signage is developed by [Hermes Labs](https://hermes-labs.ai).
+
+Hermes Labs studies failure modes in agent and LLM systems, develops open-source tools that treat language as part of the runtime, and works with teams to remediate reliability failures in production.
+
 [![CI](https://github.com/hermes-labs-ai/agent-signage/actions/workflows/ci.yml/badge.svg)](https://github.com/hermes-labs-ai/agent-signage/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
@@ -718,10 +722,9 @@ Limits worth knowing before you adopt:
 
 ## Research
 
-`agent-signage` comes out of [Hermes Labs](https://hermes-labs.ai), an AI reliability
-engineering studio. The research behind the wider programme — on how AI systems lose meaning,
-misreport their own state, and fail in ways standard evaluations miss — is published with DOIs
-at [hermes-labs.ai/research](https://hermes-labs.ai/research).
+The research behind the wider programme — on how AI systems lose meaning, misreport their own
+state, and fail in ways standard evaluations miss — is published with DOIs at
+[hermes-labs.ai/research](https://hermes-labs.ai/research).
 
 The one most directly adjacent to this tool is *Precise Records, Unstable Meanings*
 ([10.5281/zenodo.21652317](https://doi.org/10.5281/zenodo.21652317)), a measurement-validity

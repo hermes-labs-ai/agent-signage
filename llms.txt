@@ -43,6 +43,8 @@ what has and has not been found by outside review.
 
 ## About Hermes Labs
 
-agent-signage comes out of [Hermes Labs](https://hermes-labs.ai), an AI reliability
-engineering studio. Related research is published with DOIs at
-[hermes-labs.ai/research](https://hermes-labs.ai/research).
+agent-signage is developed by [Hermes Labs](https://hermes-labs.ai).
+
+Hermes Labs studies failure modes in agent and LLM systems, develops open-source tools that treat language as part of the runtime, and works with teams to remediate reliability failures in production.
+
+Related research is published with DOIs at [hermes-labs.ai/research](https://hermes-labs.ai/research).
