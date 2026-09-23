@@ -11,7 +11,7 @@
     {
       "name": "agent-signage",
       "description": "A PreToolUse hook that reports actionable git-state facts before file operations.",
-      "version": "0.1.2",
+      "version": "0.2.1",
       "source": "./claude-plugin",
       "category": "development",
       "homepage": "https://github.com/hermes-labs-ai/agent-signage"
