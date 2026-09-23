@@ -43,6 +43,7 @@ Changelog = "https://github.com/hermes-labs-ai/agent-signage/blob/main/CHANGELOG
 
 [project.scripts]
 agent-signage = "agent_signage.__main__:main"
+agent-signage-copilot-hook = "agent_signage.copilot_hook:main"
 
 [project.optional-dependencies]
 # Ruff's enabled rule set is pinned explicitly below; the compatible tool

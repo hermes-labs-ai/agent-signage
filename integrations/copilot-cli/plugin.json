@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "agent-signage",
+  "version": "0.2.1",
+  "description": "Quiet, deterministic file-operation context for GitHub Copilot CLI: warns only when a local repo fact matters.",
+  "author": {
+    "name": "Hermes Labs",
+    "url": "https://hermes-labs.ai"
+  },
+  "homepage": "https://github.com/hermes-labs-ai/agent-signage",
+  "repository": "https://github.com/hermes-labs-ai/agent-signage",
+  "license": "Apache-2.0",
+  "keywords": ["hooks", "posttooluse", "agent-reliability", "git"]
+}

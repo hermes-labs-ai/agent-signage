@@ -10,8 +10,11 @@ build/
 # Operator script: references internal push-gate env vars, stays local
 GO-LIVE.sh
 
-# Operator strategy notes: must never reach the package or the public repo
-integrations/
+# Internal integrations and operator strategy notes stay local; ship only the
+# public Copilot CLI plugin.
+integrations/*
+!integrations/copilot-cli/
+!integrations/copilot-cli/**
 
 # Reliability Lab isolated dev venv for this clone (never shipped)
 /.venv/

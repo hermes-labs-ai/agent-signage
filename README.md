@@ -127,6 +127,12 @@ cd agent-signage
 claude --plugin-dir claude-plugin
 ```
 
+### GitHub Copilot CLI
+
+The native Copilot CLI plugin reports measured signs after successful `view`,
+`edit`, or `create` operations. Its [installation and timing details](integrations/copilot-cli/README.md)
+explain the Python package prerequisite and why this uses `postToolUse`.
+
 Or add it yourself to `~/.claude/settings.json`:
 
 ```json
