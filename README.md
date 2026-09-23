@@ -604,6 +604,18 @@ does not run a new non-managed hook before that trust step. The installer prints
 backup or removal recovery path. The configuration is not retroactive: an already-running task
 that loaded hooks before installation remains uncovered until that restart and trust step.
 
+Codex CLI and Desktop users can also opt into a passive stale-check before `apply_patch`:
+
+```bash
+agent-signage install-codex-stale-check
+```
+
+This adds a separate `PreToolUse` matcher for `apply_patch`. The hook reads explicit file
+headers from Codex's patch command and passes those paths through the ordinary stale-check.
+It only supplies `additionalContext`; it cannot approve or deny the tool call. The installer
+preserves other hook groups, backs up the file, and is idempotent. Restart Codex, then review
+and trust the hook with `/hooks` before it runs.
+
 The equivalent Claude Code entry can be added to the settings file that owns the session:
 
 ```json

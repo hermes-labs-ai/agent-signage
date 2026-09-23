@@ -349,6 +349,8 @@ def _cmd_install(args) -> int:
 
 _CODEX_MATCHER = "^Bash$"
 _CODEX_STATUS = "Checking public contribution attribution"
+_CODEX_STALE_MATCHER = "^apply_patch$"
+_CODEX_STALE_STATUS = "Checking whether this checkout is stale"
 
 
 def _default_publication_gate_command() -> str:
@@ -476,6 +478,92 @@ def _cmd_install_publication_gate(args) -> int:
     return 0
 
 
+def _cmd_install_codex_stale_check(args) -> int:
+    """Add the passive apply_patch stale-check hook without replacing hooks."""
+    import json
+    import shlex
+    import shutil
+    import stat
+    import time as _t
+
+    path = os.path.abspath(os.path.expanduser(args.hooks))
+    command = args.command or shlex.join([sys.executable, "-m", "agent_signage"])
+    if not isinstance(args.timeout, int) or not 1 <= args.timeout <= 60:
+        print("--timeout must be an integer from 1 to 60", file=sys.stderr)
+        return 1
+    if os.path.islink(path):
+        print("refusing symlink hook path %s; install into its explicit target" % path,
+              file=sys.stderr)
+        return 1
+    data, mode = {}, 0o600
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        except (OSError, ValueError) as exc:
+            print("cannot read %s: %s" % (path, exc), file=sys.stderr)
+            return 1
+    if not isinstance(data, dict):
+        print("%s is not a JSON object" % path, file=sys.stderr)
+        return 1
+    hooks = data.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        print("hooks in %s is not an object" % path, file=sys.stderr)
+        return 1
+    pre = hooks.setdefault("PreToolUse", [])
+    if not isinstance(pre, list):
+        print("hooks.PreToolUse in %s is not a list" % path, file=sys.stderr)
+        return 1
+    for group in pre:
+        if not isinstance(group, dict) or group.get("matcher") != _CODEX_STALE_MATCHER:
+            continue
+        handlers = group.get("hooks", [])
+        if isinstance(handlers, list) and any(
+                isinstance(h, dict) and h.get("type") == "command"
+                and h.get("command") == command for h in handlers):
+            print("already installed in %s - nothing to do" % path)
+            return 0
+    pre.append({
+        "matcher": _CODEX_STALE_MATCHER,
+        "hooks": [{"type": "command", "command": command,
+                   "timeout": args.timeout, "statusMessage": _CODEX_STALE_STATUS}],
+    })
+    parent = os.path.dirname(path)
+    os.makedirs(parent, exist_ok=True)
+    backup = None
+    if os.path.exists(path):
+        backup = "%s.bak-%s-%d" % (path, _t.strftime("%Y%m%d-%H%M%S"), os.getpid())
+        try:
+            shutil.copy2(path, backup)
+        except OSError as exc:
+            print("cannot back up %s: %s" % (path, exc), file=sys.stderr)
+            return 1
+    tmp = "%s.tmp-%d" % (path, os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except OSError as exc:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        print("cannot install Codex stale check in %s: %s" % (path, exc), file=sys.stderr)
+        return 1
+    if backup:
+        print("backed up  %s" % backup)
+    print("installed   %s" % path)
+    print("  matcher   %s" % _CODEX_STALE_MATCHER)
+    print("  command   %s" % command)
+    print("Restart Codex, then review and trust the new hook with /hooks.")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
 
@@ -531,6 +619,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="hook command (defaults to this installation's interpreter)")
     ip.add_argument("--timeout", type=int, default=5)
     ip.set_defaults(func=_cmd_install_publication_gate)
+
+    isc = sub.add_parser(
+        "install-codex-stale-check",
+        help="add the passive apply_patch stale-check to the Codex user hooks file",
+    )
+    isc.add_argument("--hooks", default="~/.codex/hooks.json")
+    isc.add_argument("--command", default=None,
+                     help="hook command (defaults to this installation's interpreter)")
+    isc.add_argument("--timeout", type=int, default=5)
+    isc.set_defaults(func=_cmd_install_codex_stale_check)
 
     from . import preflight as _preflight
     from . import publish as _publish
