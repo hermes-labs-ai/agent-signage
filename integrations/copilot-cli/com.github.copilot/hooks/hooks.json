@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "postToolUse": [
+      {
+        "type": "command",
+        "matcher": "^(view|edit|create)$",
+        "exec": "agent-signage-copilot-hook",
+        "timeoutSec": 5
+      }
+    ]
+  }
+}
