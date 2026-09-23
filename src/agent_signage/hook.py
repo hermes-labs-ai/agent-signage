@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from typing import Any, Dict, List, Optional
@@ -31,6 +32,40 @@ from typing import Any, Dict, List, Optional
 DEADLINE_S = 3.0
 
 _SESSION_START_ENV = "AGENT_SIGNAGE_SESSION_START"
+_PATCH_FILE_HEADER = re.compile(r"^\*\*\* (?:Update|Add|Delete) File: (.+?)\s*$")
+_MAX_PATCH_BYTES = 1_000_000
+_MAX_PATCH_PATHS = 16
+
+
+def _patch_paths(payload: Dict[str, Any]) -> List[str]:
+    """Extract only explicit apply_patch file headers; ignore patch body text."""
+    if payload.get("tool_name") != "apply_patch":
+        return []
+    ti = payload.get("tool_input")
+    if not isinstance(ti, dict):
+        return []
+    command = ti.get("command")
+    if not isinstance(command, str) or len(command.encode("utf-8", "ignore")) > _MAX_PATCH_BYTES:
+        return []
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not os.path.isabs(cwd):
+        return []
+    paths = []
+    for line in command.splitlines():
+        match = _PATCH_FILE_HEADER.match(line)
+        if not match:
+            continue
+        path = match.group(1).strip()
+        if not path or "\x00" in path:
+            continue
+        # Absolute paths remain absolute; relative paths are interpreted from
+        # Codex's reported working directory (which may itself contain spaces).
+        resolved = os.path.normpath(path if os.path.isabs(path) else os.path.join(cwd, path))
+        if resolved not in paths:
+            paths.append(resolved)
+        if len(paths) >= _MAX_PATCH_PATHS:
+            break
+    return paths
 
 
 def _target_path(payload: Dict[str, Any]) -> Optional[str]:
@@ -80,6 +115,29 @@ def run(raw: str, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
         return None
     if not isinstance(payload, dict):
         return None
+
+    # Codex apply_patch exposes the unified patch in tool_input.command rather
+    # than a single path. Re-enter the ordinary path hook for explicit file
+    # headers so it uses the same signs, dedupe, deadline, and fail-open path.
+    if not _target_path(payload):
+        paths = _patch_paths(payload)
+        if not paths:
+            return None
+        texts = []
+        for path in paths:
+            per_file = dict(payload)
+            ti = dict(payload["tool_input"])
+            ti["file_path"] = path
+            per_file["tool_input"] = ti
+            try:
+                result = run(json.dumps(per_file), now=started)
+            except Exception:
+                continue
+            if result:
+                context = result.get("hookSpecificOutput", {}).get("additionalContext")
+                if isinstance(context, str) and context and context not in texts:
+                    texts.append(context)
+        return build_output(texts) if texts else None
 
     target = _target_path(payload)
     if not target:
