@@ -1,15 +1,18 @@
+<div align="center">
+
 # agent-signage
 
-**Road signs for coding agents.** One true fact, delivered at the moment your agent acts —
-and silence the rest of the time.
+**Road signs for coding agents: one true fact, delivered at the moment your agent acts — and silence the rest of the time.**
 
 agent-signage is developed by [Hermes Labs](https://hermes-labs.ai).
 
-Hermes Labs studies failure modes in agent and LLM systems, develops open-source tools that treat language as part of the runtime, and works with teams to remediate reliability failures in production.
+Hermes Labs is an agentic infrastructure company building the reliability layer for autonomous systems.
 
 [![CI](https://github.com/hermes-labs-ai/agent-signage/actions/workflows/ci.yml/badge.svg)](https://github.com/hermes-labs-ai/agent-signage/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
+
+</div>
 
 ## Contents
 
