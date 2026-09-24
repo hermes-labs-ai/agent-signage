@@ -8,7 +8,7 @@ agent-signage is developed by [Hermes Labs](https://hermes-labs.ai).
 
 Hermes Labs is an agentic infrastructure company building the reliability layer for autonomous systems.
 
-[![CI](https://github.com/hermes-labs-ai/agent-signage/actions/workflows/ci.yml/badge.svg)](https://github.com/hermes-labs-ai/agent-signage/actions/workflows/ci.yml)
+[![CI](https://github.com/roli-lpci/agent-signage/actions/workflows/ci.yml/badge.svg)](https://github.com/roli-lpci/agent-signage/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
 
@@ -85,7 +85,7 @@ pip install agent-signage
 Or from source:
 
 ```bash
-pip install git+https://github.com/hermes-labs-ai/agent-signage.git
+pip install git+https://github.com/roli-lpci/agent-signage.git
 ```
 
 ### Claude Code
@@ -118,14 +118,14 @@ marketplace. The plugin bundles its dependency-free runtime, so this path does
 not require a separate `pip install`:
 
 ```bash
-claude plugin marketplace add hermes-labs-ai/agent-signage
+claude plugin marketplace add roli-lpci/agent-signage
 claude plugin install agent-signage@hermes-labs
 ```
 
 Or load it straight from a clone, for that session only, with nothing installed:
 
 ```bash
-git clone https://github.com/hermes-labs-ai/agent-signage.git
+git clone https://github.com/roli-lpci/agent-signage.git
 cd agent-signage
 claude --plugin-dir claude-plugin
 ```
@@ -420,6 +420,41 @@ breaks is not a gate.**
 So the boundary is separate, and it has two halves. One **owns execution**, so what was checked
 and what was sent are the same bytes by construction. The other is a **PreToolUse Bash adapter**
 that stops an agent reaching `gh` around it.
+
+### Preparing a contribution footer
+
+When publishing with `--selection`, the body must end with the exact footer
+for that selection. Generate it locally from the installed package:
+
+```bash
+python3 -c "from agent_signage.contribution import footer; print(footer('unspecified'))"
+```
+
+Use `unspecified` when the selection history is unknown, `owner` when a human
+selected the work, or `autonomous` when agents selected it. Only `autonomous`
+adds the autonomous-selection claim. Copy the output once to the end of the
+body, outside code fences, and use the same value for `--selection`.
+The publisher validates this text; it does not append or repair it for you.
+The generic `attribution` command produces a different disclosure and is not
+an interchangeable footer for this mode.
+
+This contribution mode is specific to Hermes Labs: its footer names the
+responsible human contributor, and the publisher requires the authenticated
+`github.com` account to be `roli-lpci`. Generating a footer does not authorize
+publication or change the authenticated account.
+
+You can check a prepared body without contacting GitHub:
+
+```python
+from pathlib import Path
+from agent_signage.contribution import check
+
+verdict = check(Path("pr-body.md").read_text(encoding="utf-8"), "unspecified")
+print("Ready for publisher validation" if verdict.ok else verdict.reasons)
+```
+
+This checks the local footer only. The publisher still checks the account,
+target, and any disclosures that an edit must preserve.
 
 ### The publisher
 

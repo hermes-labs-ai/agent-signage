@@ -28,15 +28,43 @@
     "blocks_ever": false
   },
   "fetch_staleness_survey": {
-    "note": "coverage is capped by how recently each repo was fetched; this is the gap 0.0.8 closes",
+    "note": "coverage is capped by how recently each repo was fetched; this is the gap 0.0.8 closes Repository labels are anonymized; measured ages and hook results are unchanged.",
     "repos": [
-      {"repo": "hermes-labs-v2", "last_fetch": "1 h", "hook_says": "WARN 27 behind"},
-      {"repo": "ai-infra", "last_fetch": "3.1 days", "hook_says": "silent"},
-      {"repo": "hermeneutic", "last_fetch": "3.2 days", "hook_says": "silent"},
-      {"repo": "fidelis", "last_fetch": "22 h", "hook_says": "silent"},
-      {"repo": "lintlang", "last_fetch": "10 h", "hook_says": "WARN 5 behind"},
-      {"repo": "hermes-rubric", "last_fetch": "20 h", "hook_says": "silent"},
-      {"repo": "little-canary", "last_fetch": "4.4 days", "hook_says": "silent"}
+      {
+        "repo": "repo-01",
+        "last_fetch": "1 h",
+        "hook_says": "WARN 27 behind"
+      },
+      {
+        "repo": "repo-02",
+        "last_fetch": "3.1 days",
+        "hook_says": "silent"
+      },
+      {
+        "repo": "repo-03",
+        "last_fetch": "3.2 days",
+        "hook_says": "silent"
+      },
+      {
+        "repo": "repo-04",
+        "last_fetch": "22 h",
+        "hook_says": "silent"
+      },
+      {
+        "repo": "repo-05",
+        "last_fetch": "10 h",
+        "hook_says": "WARN 5 behind"
+      },
+      {
+        "repo": "repo-06",
+        "last_fetch": "20 h",
+        "hook_says": "silent"
+      },
+      {
+        "repo": "repo-07",
+        "last_fetch": "4.4 days",
+        "hook_says": "silent"
+      }
     ]
   }
 }

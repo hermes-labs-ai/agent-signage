@@ -35,11 +35,11 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/hermes-labs-ai/agent-signage"
-Source = "https://github.com/hermes-labs-ai/agent-signage"
-Issues = "https://github.com/hermes-labs-ai/agent-signage/issues"
-Documentation = "https://github.com/hermes-labs-ai/agent-signage#readme"
-Changelog = "https://github.com/hermes-labs-ai/agent-signage/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/roli-lpci/agent-signage"
+Source = "https://github.com/roli-lpci/agent-signage"
+Issues = "https://github.com/roli-lpci/agent-signage/issues"
+Documentation = "https://github.com/roli-lpci/agent-signage#readme"
+Changelog = "https://github.com/roli-lpci/agent-signage/blob/main/CHANGELOG.md"
 
 [project.scripts]
 agent-signage = "agent_signage.__main__:main"

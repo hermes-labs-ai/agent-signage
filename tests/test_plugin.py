@@ -38,6 +38,21 @@ def test_marketplace_points_at_the_plugin_artifact():
     assert (PLUGIN_ROOT / "hooks" / "hooks.json").is_file()
 
 
+def test_active_plugin_manifests_link_to_canonical_repository():
+    canonical = "https://github.com/roli-lpci/agent-signage"
+    marketplace = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
+    assert marketplace["plugins"][0]["homepage"] == canonical
+
+    for path in (
+        PLUGIN_ROOT / "plugin.json",
+        PLUGIN_ROOT / ".claude-plugin" / "plugin.json",
+        ROOT / "integrations" / "copilot-cli" / "plugin.json",
+    ):
+        manifest = json.loads(path.read_text())
+        assert manifest["homepage"] == canonical
+        assert manifest["repository"] == canonical
+
+
 def test_root_plugin_manifest_exists_at_the_plugin_root():
     # Agent Plugins v1.0.0 expects plugin.json at the plugin root (claude-plugin/),
     # not nested under claude-plugin/.claude-plugin/ — see issue #3306.

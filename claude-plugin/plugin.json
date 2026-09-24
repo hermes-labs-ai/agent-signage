@@ -4,8 +4,8 @@
   "description": "Road signs for coding agents: a PreToolUse hook that reports when the file you're about to touch is in a git checkout behind its upstream, and stays silent otherwise.",
   "version": "0.2.1",
   "author": { "name": "Rolando Bosch", "email": "roli@hermes-labs.ai", "url": "https://github.com/hermes-labs-ai" },
-  "homepage": "https://github.com/hermes-labs-ai/agent-signage",
-  "repository": "https://github.com/hermes-labs-ai/agent-signage",
+  "homepage": "https://github.com/roli-lpci/agent-signage",
+  "repository": "https://github.com/roli-lpci/agent-signage",
   "license": "Apache-2.0",
   "keywords": ["git", "stale-branch", "hooks", "pretooluse", "agent-reliability", "developer-tools"]
 }

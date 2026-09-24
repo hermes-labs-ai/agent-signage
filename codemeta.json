@@ -3,7 +3,7 @@
   "@type": "SoftwareSourceCode",
   "name": "agent-signage",
   "description": "Road signs for coding agents: a PreToolUse hook that checks measurable git facts about the file being touched and injects one true, actionable fact into context when something is wrong. Silent otherwise.",
-  "codeRepository": "https://github.com/hermes-labs-ai/agent-signage",
+  "codeRepository": "https://github.com/roli-lpci/agent-signage",
   "version": "0.2.1",
   "license": "https://spdx.org/licenses/Apache-2.0",
   "programmingLanguage": "Python",

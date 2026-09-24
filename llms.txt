@@ -11,7 +11,7 @@ Primary CLI:
 Install:
 - `pip install agent-signage`, then `agent-signage install` (Claude Code) or wire the printed hook entry into any harness.
 - Claude Code plugin, listed in the Hermes Labs marketplace as `agent-signage`:
-  `claude plugin marketplace add hermes-labs-ai/agent-signage` then `claude plugin install agent-signage@hermes-labs`.
+  `claude plugin marketplace add roli-lpci/agent-signage` then `claude plugin install agent-signage@hermes-labs`.
 - From a clone, for one session, nothing installed: `claude --plugin-dir claude-plugin`.
 - Any other harness: it is a subprocess that reads tool-call JSON on stdin and writes `additionalContext` JSON or nothing on stdout.
 
@@ -28,18 +28,18 @@ what has and has not been found by outside review.
 
 ## Docs
 
-- [README](https://github.com/hermes-labs-ai/agent-signage/blob/main/README.md): the signs, guarantees, cost, configuration, and the separate publication boundary (publisher + Bash gate)
-- [docs/design.md](https://github.com/hermes-labs-ai/agent-signage/blob/main/docs/design.md): the reasoning behind each guarantee
-- [docs/integrating.md](https://github.com/hermes-labs-ai/agent-signage/blob/main/docs/integrating.md): wiring this into a harness permanently
-- [CONTRIBUTING.md](https://github.com/hermes-labs-ai/agent-signage/blob/main/CONTRIBUTING.md): the bar a new sign has to meet (sound, silent, actionable)
-- [CITATION.cff](https://github.com/hermes-labs-ai/agent-signage/blob/main/CITATION.cff): how to cite this software
+- [README](https://github.com/roli-lpci/agent-signage/blob/main/README.md): the signs, guarantees, cost, configuration, and the separate publication boundary (publisher + Bash gate)
+- [docs/design.md](https://github.com/roli-lpci/agent-signage/blob/main/docs/design.md): the reasoning behind each guarantee
+- [docs/integrating.md](https://github.com/roli-lpci/agent-signage/blob/main/docs/integrating.md): wiring this into a harness permanently
+- [CONTRIBUTING.md](https://github.com/roli-lpci/agent-signage/blob/main/CONTRIBUTING.md): the bar a new sign has to meet (sound, silent, actionable)
+- [CITATION.cff](https://github.com/roli-lpci/agent-signage/blob/main/CITATION.cff): how to cite this software
 
 ## Optional
 
-- [CODE_OF_CONDUCT.md](https://github.com/hermes-labs-ai/agent-signage/blob/main/CODE_OF_CONDUCT.md)
-- [SECURITY.md](https://github.com/hermes-labs-ai/agent-signage/blob/main/SECURITY.md): how to report a vulnerability
-- [examples/README.md](https://github.com/hermes-labs-ai/agent-signage/blob/main/examples/README.md): a full runnable example, no Claude Code needed
-- [LICENSE](https://github.com/hermes-labs-ai/agent-signage/blob/main/LICENSE): Apache-2.0
+- [CODE_OF_CONDUCT.md](https://github.com/roli-lpci/agent-signage/blob/main/CODE_OF_CONDUCT.md)
+- [SECURITY.md](https://github.com/roli-lpci/agent-signage/blob/main/SECURITY.md): how to report a vulnerability
+- [examples/README.md](https://github.com/roli-lpci/agent-signage/blob/main/examples/README.md): a full runnable example, no Claude Code needed
+- [LICENSE](https://github.com/roli-lpci/agent-signage/blob/main/LICENSE): Apache-2.0
 
 ## About Hermes Labs
 

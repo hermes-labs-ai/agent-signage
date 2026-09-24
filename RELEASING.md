@@ -1,90 +1,62 @@
 # Releasing
 
-Three commands. No web UI at any point.
+Releases are published from the existing
+[`roli-lpci/agent-signage`](https://github.com/roli-lpci/agent-signage) repository.
+Publishing a GitHub release triggers `.github/workflows/publish.yml`, which builds
+the source distribution and wheel, checks them with `twine`, and uploads to PyPI
+using trusted publishing (OIDC). The workflow does not use a long-lived PyPI token.
 
-Publishing uses a PyPI API token stored as a repository secret, the same way the other Hermes
-Labs packages ship. Trusted publishing (OIDC) is deliberately not used: it is more secure, but
-it can only be configured through PyPI's website — there is no API for it and `twine` has no
-account-management surface — which would make releases un-scriptable.
+## Verify the publisher configuration
 
-## One-time setup
+Before the next release, verify that the `agent-signage` project on PyPI trusts
+this repository and workflow, especially after an ownership transfer:
 
-```bash
-# 1. create the public repo and push
-gh repo create hermes-labs-ai/agent-signage \
-  --public --source=. --push \
-  --description "Road signs for coding agents: one measured fact at the moment of action, silence otherwise"
+- GitHub owner: `roli-lpci`
+- Repository: `agent-signage`
+- Workflow filename: `publish.yml`
+- GitHub environment: `pypi`
 
-# 2. copy the existing PyPI token in from ~/.pypirc
-python3 -c "import configparser,os;c=configparser.ConfigParser();c.read(os.path.expanduser('~/.pypirc'));print(c['pypi']['password'])" \
-  | gh secret set PYPI_API_TOKEN --repo hermes-labs-ai/agent-signage
-```
+These values describe the checked-in workflow; they do not prove that the PyPI
+account has the corresponding publisher registration. A project maintainer must
+verify that registration on PyPI before publishing. See
+[PyPI's trusted-publisher setup guide](https://docs.pypi.org/trusted-publishers/adding-a-publisher/).
+Do not recreate the repository or copy a token from a developer's machine.
 
-The token in `~/.pypirc` is **user-scoped**, not project-scoped — verified by decoding its
-macaroon caveats offline: it carries a single `RequestUser` caveat and no `ProjectName` or
-`ProjectID` caveat. A project-scoped token would carry one of those and would fail on a project
-that does not exist yet. This one will not.
+## Prepare and check a release
 
-## Every release
-
-```bash
-# tag and cut the release; the workflow builds, validates and uploads
-gh release create v0.1.0 --title "agent-signage 0.1.0" --notes-file RELEASE-0.1.0.md
-```
-
-`.github/workflows/publish.yml` triggers on `release: published`, builds sdist and wheel, runs
-`twine check`, then uploads.
-
-## Verifying before you cut
-
-Everything the workflow does, run locally first:
+Choose a new package version, update `version` in `pyproject.toml` and
+`__version__` in `src/agent_signage/__init__.py` together, and prepare release notes
+for that version. From a development environment with the build and test tools:
 
 ```bash
-python -m build                 # sdist + wheel
-python -m twine check dist/*    # exactly what PyPI validates on upload
 pytest && ruff check src tests && agent-signage selftest
+release_version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+python -m build --outdir "dist/$release_version"
+python -m twine check "dist/$release_version"/*
 ```
 
-For a genuine end-to-end rehearsal without burning the version number, upload to TestPyPI —
-a separate index with its own account and token:
+The version lookup uses Python 3.11 or newer; the publishing workflow uses 3.12.
+Inspect both archives and verify a regular wheel installation before publishing.
+Use a clean build directory so an older distribution cannot be uploaded by mistake.
+
+## Publish and verify
+
+After the release checks and publisher registration are verified, create the
+release from a clean checkout of the verified release commit and its
+version-specific notes:
 
 ```bash
-python -m twine upload --repository testpypi dist/*
-pip install --index-url https://test.pypi.org/simple/ agent-signage
+release_commit=$(git rev-parse HEAD)
+gh release create "v$release_version" \
+  --repo roli-lpci/agent-signage --target "$release_commit" \
+  --title "agent-signage $release_version" \
+  --notes-file "RELEASE-$release_version.md"
 ```
 
-## What cannot be undone
+The release targets the checked-out commit. This command publishes a GitHub release and starts the PyPI workflow; it is not a dry run.
+Check the workflow result and install that exact version from PyPI in a fresh
+environment before declaring the release successful. A published GitHub release
+alone does not establish a successful package upload.
 
-**A version number on PyPI is permanent.** You cannot re-upload `0.1.0` after deleting or
-yanking it — the filename is burned for good. If a release is wrong, the fix is `0.1.1`, never
-a re-upload.
-
-The project name is also claimed permanently on first upload.
-
-## Order matters
-
-The README's primary install is `pip install agent-signage`, so that command has to actually
-work by the time anyone reads it. Run the whole sequence in one sitting rather than pushing the
-repo and leaving the package for later:
-
-1. Create the repo and push — it has to exist first, or the README badges and the package page
-   both point at a 404.
-2. Set `PYPI_API_TOKEN`.
-3. Cut the release, which triggers the upload.
-
-The gap between step 1 and step 3 is the only window in which the README's install instruction
-is untrue. Keep it to minutes. If the upload fails, either fix and retry immediately or reword
-the install section — do not leave a published README telling people to run a command that does
-not work.
-
-## Version bump checklist
-
-`__version__` in `src/agent_signage/__init__.py` and `version` in `pyproject.toml` must match.
-
-```bash
-python3 -c "
-import re,pathlib
-i=re.search(r'__version__ = \"([^\"]+)\"',pathlib.Path('src/agent_signage/__init__.py').read_text()).group(1)
-p=re.search(r'^version = \"([^\"]+)\"',pathlib.Path('pyproject.toml').read_text(),re.M).group(1)
-print(f'init={i} pyproject={p}', 'OK' if i==p else 'MISMATCH')"
-```
+PyPI distribution filenames cannot be reused. If an uploaded release needs a
+fix, publish a new version rather than deleting and re-uploading the same files.
