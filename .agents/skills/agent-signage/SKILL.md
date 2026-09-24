@@ -47,7 +47,7 @@ agent-signage install    # writes the Claude Code hook entry for you
 Try it without installing anything, for one session:
 
 ```bash
-git clone https://github.com/hermes-labs-ai/agent-signage.git
+git clone https://github.com/roli-lpci/agent-signage.git
 cd agent-signage
 claude --plugin-dir claude-plugin
 ```
@@ -89,4 +89,4 @@ echo '{"session_id":"abc","tool_input":{"file_path":"/path/to/file.py"}}' | pyth
 ## More
 
 Full docs, guarantees, and design notes:
-https://github.com/hermes-labs-ai/agent-signage
+https://github.com/roli-lpci/agent-signage

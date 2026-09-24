@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-git clone https://github.com/hermes-labs-ai/agent-signage.git
+git clone https://github.com/roli-lpci/agent-signage.git
 cd agent-signage
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"

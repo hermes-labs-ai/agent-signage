@@ -7,8 +7,8 @@
     "name": "Hermes Labs",
     "url": "https://hermes-labs.ai"
   },
-  "homepage": "https://github.com/hermes-labs-ai/agent-signage",
-  "repository": "https://github.com/hermes-labs-ai/agent-signage",
+  "homepage": "https://github.com/roli-lpci/agent-signage",
+  "repository": "https://github.com/roli-lpci/agent-signage",
   "license": "Apache-2.0",
   "keywords": ["hooks", "posttooluse", "agent-reliability", "git"]
 }

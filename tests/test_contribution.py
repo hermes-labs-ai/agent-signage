@@ -152,3 +152,16 @@ def test_unknown_selection_accepts_verified_production_footer():
 
 def test_unknown_selection_rejects_autonomous_claim():
     assert not contribution.check(contribution.footer('autonomous'), 'unspecified').ok
+
+
+@pytest.mark.parametrize('selection', contribution.SELECTIONS)
+def test_missing_footer_explains_recovery(selection):
+    body = 'Describe the change and its validation.'
+    verdict = contribution.check(body, selection)
+    reason = next(r for r in verdict.reasons
+                  if r.code == 'contribution-footer-mismatch')
+    assert 'append the exact %s footer' % selection in reason.detail
+    assert 'https://github.com/roli-lpci/agent-signage#publication-boundary' in reason.detail
+    assert 'No footer is added automatically' in reason.detail
+    repaired = body + '\n\n' + contribution.footer(selection) + '\n'
+    assert contribution.check(repaired, selection).ok

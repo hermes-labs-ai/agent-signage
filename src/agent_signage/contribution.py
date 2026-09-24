@@ -1,4 +1,4 @@
-"""Exact contribution footer approved in DELEGATED-CONTRIBUTIONS.md (2026-09-06).
+"""Contribution footer and selection validation for the public publisher.
 
 Selection and authority remain caller declarations; the publisher checks the
 actual authenticated account separately. This is not an authorization service.
@@ -8,7 +8,7 @@ from . import preflight
 SELECTIONS = ("autonomous", "owner", "unspecified")
 ACCOUNT = "roli-lpci"
 SELECTION_MARK = "<!-- hermes-labs:selection autonomous -->"
-POLICY = "ai-infra/commitment-gate/DELEGATED-CONTRIBUTIONS.md"
+POLICY = "https://github.com/roli-lpci/agent-signage#publication-boundary"
 
 
 def footer(selection):

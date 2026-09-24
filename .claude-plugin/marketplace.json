@@ -14,7 +14,7 @@
       "version": "0.2.1",
       "source": "./claude-plugin",
       "category": "development",
-      "homepage": "https://github.com/hermes-labs-ai/agent-signage"
+      "homepage": "https://github.com/roli-lpci/agent-signage"
     }
   ]
 }

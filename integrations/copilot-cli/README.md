@@ -12,8 +12,8 @@ Git state already on disk.
 Install the agent-signage Python package first, then install this plugin:
 
 ```bash
-python3 -m pip install --upgrade git+https://github.com/hermes-labs-ai/agent-signage.git
-copilot plugin install hermes-labs-ai/agent-signage:integrations/copilot-cli
+python3 -m pip install --upgrade git+https://github.com/roli-lpci/agent-signage.git
+copilot plugin install roli-lpci/agent-signage:integrations/copilot-cli
 ```
 
 In a new Copilot CLI session, run `/plugin list` to confirm the plugin is
